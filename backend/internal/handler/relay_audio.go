@@ -21,10 +21,14 @@ import (
 	"go.uber.org/zap"
 )
 
-// relayAudioPlatformGate 仅放行 openai 平台分组（audio 分组即 openai 平台）。
+// relayAudioPlatformGate 放行 openai / anthropic 平台分组（claude 分组复用音频账号时走 anthropic）。
 func (h *OpenAIGatewayHandler) relayAudioPlatformGate(c *gin.Context) (*service.APIKey, bool) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
-	if !ok || apiKey.Group == nil || apiKey.Group.Platform != service.PlatformOpenAI {
+	platform := ""
+	if ok && apiKey.Group != nil {
+		platform = apiKey.Group.Platform
+	}
+	if !ok || (platform != service.PlatformOpenAI && platform != service.PlatformAnthropic) {
 		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Audio API is not supported for this platform")
 		return nil, false
 	}

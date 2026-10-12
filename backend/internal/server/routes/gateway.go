@@ -309,7 +309,7 @@ func RegisterGatewayRoutes(
 		gateway.PATCH("/custom-voices/:voice_id", customVoicePathHandler)
 		gateway.DELETE("/custom-voices/:voice_id", customVoicePathHandler)
 
-		// Audio relay（openai 平台专用，平台门在 handler 内）：audio-proxy 统一计费入口。
+		// Audio relay（openai/anthropic 平台分组可用，平台门在 handler 内）：audio-proxy 统一计费入口。
 		// 最小侵入补丁：新增 handler/service/relay_audio.go，路由仅此 3 行。
 		gateway.POST("/audio/speech", h.OpenAIGateway.RelayAudioSpeech)
 		gateway.POST("/music", h.OpenAIGateway.RelayMusicCreate)
