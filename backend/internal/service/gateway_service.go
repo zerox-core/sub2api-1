@@ -799,6 +799,13 @@ type GatewayService struct {
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	antigravityGateway    *AntigravityGatewayService // antigravity countTokens 真实请求映射
+}
+
+// SetAntigravityGateway 注入 AntigravityGatewayService（供 countTokens 真实请求映射使用）。
+// 由 wire 在两个服务都构造完成后调用，避免构造参数循环依赖。
+func (s *GatewayService) SetAntigravityGateway(ag *AntigravityGatewayService) {
+	s.antigravityGateway = ag
 }
 
 // NewGatewayService creates a new GatewayService

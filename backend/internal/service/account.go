@@ -2057,6 +2057,20 @@ func (a *Account) IsOpenAIPassthroughEnabled() bool {
 	return false
 }
 
+// IsOpenAIStripPromptCacheKeyEnabled 返回 OpenAI 账号是否在转发前剥除 prompt_cache_key。
+//
+// 背景：sub2api 会为 apikey 型账号注入/透传 prompt_cache_key（会话粘性与上游缓存亲和），
+// 但部分严格 OpenAI 兼容上游（如 Google generativelanguage v1beta/openai）会把该字段
+// 判为未知字段并直接 400 INVALID_ARGUMENT。需要直连这类上游时，
+// 置 accounts.extra.openai_strip_prompt_cache_key=true。
+func (a *Account) IsOpenAIStripPromptCacheKeyEnabled() bool {
+	if a == nil || !a.IsOpenAI() || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra["openai_strip_prompt_cache_key"].(bool)
+	return ok && enabled
+}
+
 // IsOpenAIResponsesWebSocketV2Enabled 返回 OpenAI 账号是否开启 Responses WebSocket v2。
 //
 // 分类型新字段：
@@ -2334,11 +2348,11 @@ func (a *Account) IsAnthropicOAuthOrSetupToken() bool {
 }
 
 // IsTLSFingerprintEnabled 检查是否启用 TLS 指纹伪装
-// 仅适用于 Anthropic OAuth/SetupToken 类型账号
-// 启用后将模拟 Claude Code (Node.js) 客户端的 TLS 握手特征
+// 适用于 Anthropic OAuth/SetupToken 账号（模拟 Claude Code / Node.js 握手特征）
+// 以及 Antigravity OAuth 账号（模拟 Chrome 客户端握手特征，保护 Google 出站链路）
 func (a *Account) IsTLSFingerprintEnabled() bool {
-	// 仅支持 Anthropic OAuth/SetupToken 账号
-	if !a.IsAnthropicOAuthOrSetupToken() {
+	// Anthropic OAuth/SetupToken 或 Antigravity OAuth 账号
+	if !a.IsAnthropicOAuthOrSetupToken() && !a.IsAntigravityOAuth() {
 		return false
 	}
 	if a.Extra == nil {
@@ -2350,6 +2364,11 @@ func (a *Account) IsTLSFingerprintEnabled() bool {
 		}
 	}
 	return false
+}
+
+// IsAntigravityOAuth 判断是否为 Antigravity OAuth 类型账号
+func (a *Account) IsAntigravityOAuth() bool {
+	return a.Platform == PlatformAntigravity && a.Type == AccountTypeOAuth
 }
 
 // GetTLSFingerprintProfileID 获取账号绑定的 TLS 指纹模板 ID

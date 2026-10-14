@@ -18,6 +18,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 )
 
@@ -32,6 +33,7 @@ type antigravityRetryLoopParams struct {
 	body            []byte
 	c               *gin.Context
 	httpUpstream    HTTPUpstream
+	tlsProfile      *tlsfingerprint.Profile // 数据面出站 TLS 指纹（cloudcode-pa 直连链路）；nil 不伪装
 	settingService  *SettingService
 	accountRepo     AccountRepository // 用于智能重试的模型级别限流
 	handleError     func(ctx context.Context, prefix string, account *Account, statusCode int, headers http.Header, body []byte, requestedModel string, groupID int64, sessionHash string, isStickySession bool) *handleModelRateLimitResult
@@ -228,7 +230,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				}
 			}
 
-			retryResp, retryErr := p.httpUpstream.Do(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency)
+			retryResp, retryErr := p.httpUpstream.DoWithTLS(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency, p.tlsProfile)
 			if retryErr == nil && retryResp != nil && retryResp.StatusCode != http.StatusTooManyRequests && retryResp.StatusCode != http.StatusServiceUnavailable {
 				log.Printf("%s status=%d smart_retry_success attempt=%d/%d", p.prefix, retryResp.StatusCode, attempt, maxAttempts)
 				// 重试成功，清除 MODEL_CAPACITY_EXHAUSTED cooldown
@@ -403,7 +405,7 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 			break
 		}
 
-		retryResp, retryErr := p.httpUpstream.Do(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency)
+		retryResp, retryErr := p.httpUpstream.DoWithTLS(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency, p.tlsProfile)
 		if retryErr == nil && retryResp != nil && retryResp.StatusCode != http.StatusTooManyRequests && retryResp.StatusCode != http.StatusServiceUnavailable {
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d single_account_503_retry_success attempt=%d/%d total_waited=%v",
 				p.prefix, retryResp.StatusCode, attempt, antigravitySingleAccountSmartRetryMaxAttempts, totalWaited)
@@ -465,6 +467,12 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 
 // antigravityRetryLoop 执行带 URL fallback 的重试循环
 func (s *AntigravityGatewayService) antigravityRetryLoop(p antigravityRetryLoopParams) (*antigravityRetryLoopResult, error) {
+	// 数据面出站 TLS 指纹：按账号 enable_tls_fingerprint 配置解析（nil = 不伪装）。
+	// 在循环入口统一解析，7 个调用点无需各自传参。
+	if p.tlsProfile == nil {
+		p.tlsProfile = s.resolveAntigravityTLSProfile(p.account)
+	}
+
 	// 预检查：模型限流 + overages 启用 + 积分未耗尽 → 直接注入 AI Credits
 	overagesInjected := false
 	if p.requestedModel != "" && p.account.Platform == PlatformAntigravity &&
@@ -541,7 +549,9 @@ urlFallbackLoop:
 				return nil, err
 			}
 
-			resp, err = p.httpUpstream.Do(upstreamReq, p.proxyURL, p.account.ID, p.account.Concurrency)
+			// 数据面出站统一走 TLS 指纹（p.tlsProfile 由账号 enable_tls_fingerprint 配置解析；
+			// nil 时 DoWithTLS 行为与 Do 完全一致）
+			resp, err = p.httpUpstream.DoWithTLS(upstreamReq, p.proxyURL, p.account.ID, p.account.Concurrency, p.tlsProfile)
 			if err == nil && resp == nil {
 				err = errors.New("upstream returned nil response")
 			}

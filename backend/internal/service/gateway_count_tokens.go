@@ -103,11 +103,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		}
 	}
 
-	// Antigravity 账户不支持 count_tokens，返回 404 让客户端 fallback 到本地估算。
-	// 返回 nil 避免 handler 层记录为错误，也不设置 ops 上游错误上下文。
+	// Antigravity 账户：映射为 /v1internal:countTokens 真实请求（移植自 CPA）。
+	// 上游不可用时降级 404 让客户端 fallback 到本地估算。
 	if account.Platform == PlatformAntigravity {
-		s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported for this platform")
-		return nil
+		return s.antigravityGateway.ForwardCountTokens(ctx, c, account, reqModel, parsed.Body.Bytes())
 	}
 
 	// 应用模型映射：

@@ -540,7 +540,9 @@ func (c *Client) OnboardUser(ctx context.Context, accessToken, tierID string) (s
 			}
 			req.Header.Set("Authorization", "Bearer "+accessToken)
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("User-Agent", GetUserAgentForContext(ctx))
+			// onboardUser 为控制面请求，使用长格式 UA（短格式 + google-api-nodejs-client），
+			// 与 CPA AntigravityOnboardUserUserAgent 及官方客户端行为一致。
+			req.Header.Set("User-Agent", BuildOnboardUserUserAgent(GetUserAgentVersionForContext(ctx)))
 
 			resp, err := servertiming.Do(c.httpClient, req)
 			if err != nil {

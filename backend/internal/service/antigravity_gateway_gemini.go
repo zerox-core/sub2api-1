@@ -72,16 +72,9 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	case "generateContent", "streamGenerateContent":
 		// ok
 	case "countTokens":
-		// 直接返回空值，不透传上游
-		c.JSON(http.StatusOK, map[string]any{"totalTokens": 0})
-		return &ForwardResult{
-			RequestID:    "",
-			Usage:        ClaudeUsage{},
-			Model:        originalModel,
-			Stream:       false,
-			Duration:     time.Since(startTime),
-			FirstTokenMs: nil,
-		}, nil
+		// 映射为 /v1internal:countTokens 真实请求（移植自 CPA）；
+		// 失败时内部降级返回 {"totalTokens": 0}
+		return nil, s.antigravityCountTokensFromGemini(ctx, c, account, originalModel, body)
 	default:
 		return nil, s.writeGoogleError(c, http.StatusNotFound, "Unsupported action: "+action)
 	}
@@ -209,7 +202,8 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 				if err == nil {
 					fallbackReq, err := antigravity.NewAPIRequest(ctx, upstreamAction, accessToken, fallbackWrapped)
 					if err == nil {
-						fallbackResp, err := s.httpUpstream.Do(fallbackReq, proxyURL, account.ID, account.Concurrency)
+						// 数据面出站走 TLS 指纹（与主链路一致）
+						fallbackResp, err := s.httpUpstream.DoWithTLS(fallbackReq, proxyURL, account.ID, account.Concurrency, s.resolveAntigravityTLSProfile(account))
 						if err == nil && fallbackResp.StatusCode < 400 {
 							_ = resp.Body.Close()
 							resp = fallbackResp

@@ -33,8 +33,18 @@ const (
 	// AntigravityUserAgentVersionEnv 是 Antigravity User-Agent 版本号的环境变量名。
 	AntigravityUserAgentVersionEnv = "ANTIGRAVITY_USER_AGENT_VERSION"
 
+	// AntigravityUserAgentCLEnv 是 Antigravity User-Agent 中 cl（changelist）号的环境变量名。
+	// 对齐官方 Windows 客户端 2026-10-06 mitmproxy 抓包格式：
+	// antigravity/hub/{ver} (aidev_client; os_type=windows; arch=amd64; cl={cl})
+	AntigravityUserAgentCLEnv = "ANTIGRAVITY_USER_AGENT_CL"
+
 	// DefaultUserAgentVersion 是未通过环境变量或后台设置覆盖时使用的默认版本号。
-	DefaultUserAgentVersion = "2.9.1"
+	// 2.9.0 是 Cloud Code 接受的最低版本（低于该值新模型被拒）；2.19.1 为
+	// 2026-10-06 官方 Windows 客户端抓包值（与生产 tlsproxy 一致）。
+	DefaultUserAgentVersion = "2.19.1"
+
+	// DefaultUserAgentCL 是未通过环境变量覆盖时使用的默认 cl 号（抓包值）。
+	DefaultUserAgentCL = "991101027"
 
 	// 固定的 redirect_uri（用户需手动复制 code）
 	RedirectURI = "http://localhost:8085/callback"
@@ -64,8 +74,12 @@ type UserAgentVersionResolver func(ctx context.Context) string
 
 var (
 	// defaultUserAgentVersion 可通过环境变量 ANTIGRAVITY_USER_AGENT_VERSION 配置。
-	defaultUserAgentVersion  = DefaultUserAgentVersion
-	userAgentVersionMu       sync.RWMutex
+	defaultUserAgentVersion = DefaultUserAgentVersion
+	// defaultUserAgentCL 可通过环境变量 ANTIGRAVITY_USER_AGENT_CL 配置。
+	defaultUserAgentCL = DefaultUserAgentCL
+	userAgentVersionMu sync.RWMutex
+	// userAgentCLMu 保护 defaultUserAgentCL 的并发读写。
+	userAgentCLMu            sync.RWMutex
 	userAgentVersionResolver UserAgentVersionResolver
 )
 
@@ -76,6 +90,10 @@ func init() {
 	// 从环境变量读取版本号，未设置则使用默认值
 	if version := NormalizeUserAgentVersion(os.Getenv(AntigravityUserAgentVersionEnv)); version != "" {
 		defaultUserAgentVersion = version
+	}
+	// 从环境变量读取 cl 号，未设置则使用默认值
+	if cl := NormalizeUserAgentCL(os.Getenv(AntigravityUserAgentCLEnv)); cl != "" {
+		defaultUserAgentCL = cl
 	}
 	// 从环境变量读取 client_secret，未设置则使用默认值
 	if secret := os.Getenv(AntigravityOAuthClientSecretEnv); secret != "" {
@@ -90,6 +108,27 @@ func NormalizeUserAgentVersion(version string) string {
 		return ""
 	}
 	return version
+}
+
+// NormalizeUserAgentCL 校验并归一化 cl 号（纯数字，长度 6-12）。
+func NormalizeUserAgentCL(cl string) string {
+	cl = strings.TrimSpace(cl)
+	if cl == "" || len(cl) < 6 || len(cl) > 12 {
+		return ""
+	}
+	for _, ch := range cl {
+		if ch < '0' || ch > '9' {
+			return ""
+		}
+	}
+	return cl
+}
+
+// GetUserAgentCL 返回当前配置的 cl 号。
+func GetUserAgentCL() string {
+	userAgentCLMu.RLock()
+	defer userAgentCLMu.RUnlock()
+	return defaultUserAgentCL
 }
 
 // GetDefaultUserAgentVersion 返回配置文件/环境变量层面的默认版本号。
@@ -120,12 +159,22 @@ func GetUserAgentVersionForContext(ctx context.Context) string {
 	return defaultUserAgentVersion
 }
 
-// BuildUserAgent 使用指定版本号构造 User-Agent；版本为空或非法时回退默认值。
+// BuildUserAgent 使用指定版本号构造数据面 User-Agent（短格式）。
+// 对齐官方 Windows 客户端 2026-10-06 抓包：
+// antigravity/hub/{ver} (aidev_client; os_type=windows; arch=amd64; cl={cl})
 func BuildUserAgent(version string) string {
-	if normalized := NormalizeUserAgentVersion(version); normalized != "" {
-		return fmt.Sprintf("antigravity/%s windows/amd64", normalized)
+	normalized := NormalizeUserAgentVersion(version)
+	if normalized == "" {
+		normalized = defaultUserAgentVersion
 	}
-	return fmt.Sprintf("antigravity/%s windows/amd64", defaultUserAgentVersion)
+	return fmt.Sprintf("antigravity/hub/%s (aidev_client; os_type=windows; arch=amd64; cl=%s)",
+		normalized, GetUserAgentCL())
+}
+
+// BuildOnboardUserUserAgent 构造控制面（onboardUser 等）User-Agent（长格式）：
+// 短格式后追加 google-api-nodejs-client/10.3.0，与 CPA AntigravityOnboardUserUserAgent 语义一致。
+func BuildOnboardUserUserAgent(version string) string {
+	return BuildUserAgent(version) + " google-api-nodejs-client/10.3.0"
 }
 
 // GetUserAgentForContext 返回当前请求应使用的 User-Agent。

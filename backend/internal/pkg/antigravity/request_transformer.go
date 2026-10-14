@@ -101,6 +101,9 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 		if targetModel != webSearchFallbackModel {
 			targetModel = webSearchFallbackModel
 		}
+	} else if strings.Contains(targetModel, "image") {
+		// 生图模型使用 image_gen 请求类型（与 CPA geminiToAntigravity 一致）
+		requestType = "image_gen"
 	}
 
 	// 检测是否启用 thinking
@@ -178,9 +181,23 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	}
 
 	// 6. 包装为 v1internal 请求
+	// requestId 采用官方 Windows 客户端（2026-10-06 抓包）斜杠格式：
+	//   agent/{conv-uuid}/{epoch-ms}/{uuid4}/{seq}
+	// image_gen 使用专用格式 image_gen/{epoch-ms}/{uuid4}/12（与 CPA 一致）；
+	// web_search 请求不携带 requestId（与官方客户端及 CPA 上游一致）。
+	var requestID string
+	switch requestType {
+	case "image_gen":
+		requestID = fmt.Sprintf("image_gen/%d/%s/12", time.Now().UnixMilli(), uuid.New().String())
+	case "web_search":
+		// 不携带
+	default:
+		requestID = fmt.Sprintf("agent/%s/%d/%s/1",
+			uuid.New().String(), time.Now().UnixMilli(), uuid.New().String())
+	}
 	v1Req := V1InternalRequest{
 		Project:     projectID,
-		RequestID:   "agent-" + uuid.New().String(),
+		RequestID:   requestID,
 		UserAgent:   "antigravity", // 固定值，与官方客户端一致
 		RequestType: requestType,
 		Model:       targetModel,
