@@ -1131,6 +1131,34 @@ export async function refreshOpenCodeGoUsage(id: number): Promise<OpenCodeGoUsag
   return data
 }
 
+// ====== Antigravity 配额摘要（retrieveUserQuotaSummary，不消耗对话额度） ======
+export interface AntigravityQuotaBucket {
+  bucket_id: string
+  window: string // "5h" | "weekly"
+  reset_time: string
+  remaining: number | null
+}
+
+export interface AntigravityQuotaGroup {
+  key: string // "gemini" | "third"
+  display_name: string
+  buckets: AntigravityQuotaBucket[]
+}
+
+export interface AntigravityQuotaSnapshot {
+  account_id: number
+  email?: string
+  fetched_at: string
+  groups: AntigravityQuotaGroup[]
+}
+
+export async function getAntigravityQuota(id: number, force = false): Promise<AntigravityQuotaSnapshot> {
+  const { data } = await apiClient.get<AntigravityQuotaSnapshot>(`/admin/accounts/${id}/antigravity-quota`, {
+    params: force ? { force: 1 } : {}
+  })
+  return data
+}
+
 export const accountsAPI = {
   list,
   listWithEtag,
@@ -1199,7 +1227,8 @@ export const accountsAPI = {
   updateOpenCodeGoUsageSettings,
   getOpenCodeGoUsage,
   setOpenCodeGoUsageAutoRefresh,
-  refreshOpenCodeGoUsage
+  refreshOpenCodeGoUsage,
+  getAntigravityQuota
 }
 
 export default accountsAPI

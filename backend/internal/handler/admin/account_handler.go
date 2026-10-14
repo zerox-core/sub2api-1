@@ -67,6 +67,7 @@ type AccountHandler struct {
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
+	antigravityQuota        *service.AntigravityQuotaService
 	cfg                     *config.Config
 	opencodeGoUsage         *service.OpenCodeGoUsageService
 }
@@ -78,6 +79,11 @@ func (h *AccountHandler) SetUpstreamBillingProbeService(probe *service.UpstreamB
 
 func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUsageService) {
 	h.ollamaCloudUsage = usage
+}
+
+// SetAntigravityQuotaService attaches the optional antigravity quota service.
+func (h *AccountHandler) SetAntigravityQuotaService(svc *service.AntigravityQuotaService) {
+	h.antigravityQuota = svc
 }
 
 func (h *AccountHandler) SetOpenCodeGoUsageService(usage *service.OpenCodeGoUsageService) {
@@ -3351,6 +3357,27 @@ func (h *AccountHandler) BatchRefreshTier(c *gin.Context) {
 // GET /api/v1/admin/accounts/antigravity/default-model-mapping
 func (h *AccountHandler) GetAntigravityDefaultModelMapping(c *gin.Context) {
 	response.Success(c, domain.DefaultAntigravityModelMapping)
+}
+
+// GetAntigravityQuota 获取 antigravity 账号的配额摘要（5h/weekly 桶）
+// GET /api/v1/admin/accounts/:id/antigravity-quota?force=1
+func (h *AccountHandler) GetAntigravityQuota(c *gin.Context) {
+	if h.antigravityQuota == nil {
+		response.ErrorFrom(c, fmt.Errorf("antigravity quota service 未装配"))
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	force := c.Query("force") == "1"
+	snapshot, err := h.antigravityQuota.GetQuota(c.Request.Context(), accountID, force)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, snapshot)
 }
 
 // sanitizeExtraBaseRPM 对 extra map 中的 base_rpm 值进行范围校验和归一化。
