@@ -104,6 +104,15 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		upstreamBody = normalizedBody
 	}
 
+	// 3b. 严格上游（extra.openai_strip_prompt_cache_key=true）剥除客户端自带的
+	// prompt_cache_key —— raw 路径不注入该字段，但客户端 body 自带时必须删除，
+	// 否则 Google v1beta/openai 等上游会 400 Unknown name "prompt_cache_key"。
+	if account.IsOpenAIStripPromptCacheKeyEnabled() && gjson.GetBytes(upstreamBody, "prompt_cache_key").Exists() {
+		if stripped, delErr := sjson.DeleteBytes(upstreamBody, "prompt_cache_key"); delErr == nil {
+			upstreamBody = stripped
+		}
+	}
+
 	// 4. Apply OpenAI fast policy on the CC body
 	updatedBody, policyErr := s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, upstreamBody)
 	if policyErr != nil {

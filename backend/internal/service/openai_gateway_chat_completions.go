@@ -293,7 +293,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// record the final slug immediately before policy/auth/upstream dispatch.
 	SetOpsUpstreamModel(c, upstreamModel)
 
-	if account.Type == AccountTypeAPIKey {
+	if account.Type == AccountTypeAPIKey && !account.IsOpenAIStripPromptCacheKeyEnabled() {
 		if trimmedKey := strings.TrimSpace(promptCacheKey); trimmedKey != "" {
 			var reqBody map[string]any
 			if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
