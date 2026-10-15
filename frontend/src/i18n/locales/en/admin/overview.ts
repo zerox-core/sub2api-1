@@ -1164,7 +1164,8 @@ export default {
           strategyRR: 'Round robin',
           strategyRand: 'Random',
           realModelTag: 'real model',
-          realModelTooltip: 'This auto is a real model provided by an upstream account (not the smart router); selecting it forwards auto requests directly to that model.'
+          realModelTooltip: 'This auto is a real model provided by an upstream account (not the smart router); selecting it forwards auto requests directly to that model.',
+          realModelConflict: 'A real auto model entry is selected: with smart routing on, auto requests are rewritten to a pooled model and the real auto model is never called (turn this panel off and unselect the entry to reach it directly).'
         },
         errors: {
           empty: 'Please enter a model entry',
