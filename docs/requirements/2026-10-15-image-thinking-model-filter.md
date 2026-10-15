@@ -316,12 +316,70 @@
 
 #### 遗留
 
-1. **配音输出格式**：百炼原生返回 WAV；客户端传 `response_format=mp3` 目前仍得到 WAV
-   （Content-Type 正确）。要真 mp3 需在原生 `parameters.format` 指定或网关侧转码。
-2. **分组 5「国模」生图仍不可用**：该组只绑定了账号 41，百炼账号 43 **未绑定分组 5**，
-   因此 `model_routing` 里指向 43 的规则在该组无效（报 `model_not_supported`）。
-   按用户「国模和薅羊毛组都不配置生图」的要求，分组 5/14/15 的生图模型与
-   `model_routing` 本应**移除**（而 14/15 目前反而可用）—— **待用户确认后再动**。
-3. `relay_audio_dashscope.go` 目前把音频 URL 全量读入内存后写回；
+1. `relay_audio_dashscope.go` 目前把音频 URL 全量读入内存后写回；
    若后续出现大音频，需要改为流式透传（`writeGrokMediaContentResponse` 已具备该形态）。
-4. R1 / R3 / R5 / R6 / R7 仍未实现。
+2. R1 / R3 / R5 / R6 / R7 仍未实现。
+
+### 2026-10-15 P3：mp3 输出 + 分组 5 生图打通（用户决策后）
+
+用户两项决策：**「1 允许配置生图」**、**「2 需要 mp3」**。
+
+#### ① 分组 5「国模」生图打通
+
+账号 43 之前未绑定分组 5，`model_routing` 里指向 43 的规则在该组无效。
+现执行 `INSERT INTO account_groups (account_id, group_id) VALUES (43, 5)`，
+账号 43 绑定关系变为 5/14/15/24/25，分组 5 的 12 个生图模型随之可用
+（用户确认**允许这些组配置生图**，故不再移除生图模型）。
+
+验证（key 12 → 分组 5）：`z-image-turbo` **200**（1024×1536）、`qwen-image-2.0` **200**（2048×2048），
+usage 记 `group_id=5, account_id=43, image_count=1`。
+
+#### ② 配音 mp3 输出
+
+先做参数探测，结论明确：**百炼 qwen3-tts-flash 只输出 WAV**——
+`parameters.format` / `input.format` / 顶层 `format` / `parameters.response_format`
+四种写法全部无效（下载后一律 `audio/x-wav` + RIFF 头）。官方文档
+[Qwen-TTS API](https://help.aliyun.com/zh/model-studio/qwen-tts-api) 的请求体也只有
+`model` / `input.text` / `input.voice` / `input.language_type`，没有格式参数。
+
+因此改在**网关侧转码**：新增 `dashScopeWAVToMP3`，用纯 Go 的
+[shine-mp3](https://github.com/braheezy/shine-mp3)（无需 CGO，也不必在运行镜像里装 ffmpeg）。
+适配器按 `response_format`（缺省 mp3，OpenAI 约定）决定是否转码：
+
+| `response_format` | 行为 |
+| --- | --- |
+| 缺省 / `mp3` | 转码为 MP3，`Content-Type: audio/mpeg` |
+| `wav` | 原样返回百炼 WAV |
+| 其它（`opus`/`aac`/…） | 无对应编码器，回退返回 WAV |
+
+转码失败同样回退 WAV 并记 warning，不会让整个请求失败。
+
+**踩到的两个坑（均已修，并有回归测试）**：
+
+1. `EncodeBufferInterleaved` **每调用一次只产出一帧**（576 样本 ≈ 0.05 秒），必须用会循环的
+   `Write`。最初误用它，导致 2 秒音频只转出 0.25 秒。现测试断言
+   「帧数 == ceil(输入样本数 / 576)」（24kHz 单声道 128 kbps），覆盖 1/2/8/20 秒。
+2. 百炼 WAV 的 **data chunk size 字段是坏值**（实测 `0x3FFFFFFD`，Python `wave`
+   直接报出 `frames=1073741773`）。解析器已对 size 越界做兜底（按实际剩余字节读），
+   否则取不到 PCM。
+
+#### ✅ 验证（镜像 `sub2api-ag-quota:dashscope-native4-20261015`）
+
+| 场景 | 结果 |
+| --- | --- |
+| 分组 5 生图 `z-image-turbo` / `qwen-image-2.0` | **200** + 图片 URL，usage 记 `image_count=1` |
+| 配音缺省格式 | **200**，`audio/mpeg`，帧头 `ff f3`，`file(1)` 识别为 `MPEG ADTS, layer III, v2, 128 kbps, 24 kHz, Monaural` |
+| 配音 `response_format=mp3` | **200**，`audio/mpeg` |
+| 配音 `response_format=wav` | **200**，`audio/x-wav`（RIFF，不转码） |
+| 时长一致性 | 同文本 mp3 7.37s vs wav 7.52s（差 0.15s，属帧对齐范围） |
+
+> 过程说明：曾用「mp3 请求 / wav 请求各发一次」的方式比时长，出现过 1.69s 差异并一度
+> 误判为截断。真实原因是**两次独立 TTS 调用本身的输出长度会波动**（同文本实测
+> wav 341 804 → 361 004 字节，mp3 140 928 → 117 888 字节）。改用对同一份输入的
+> 帧数断言复核后，确认转码既不截断也不重复。
+
+#### 分组 5/14/15 生图配置状态
+
+按用户决策保持现有配置：三组各 12 个生图模型 + `model_routing`
+`{"qwen-image-*":[43],"wan2.7-image*":[43],"z-image-turbo":[43]}`（enabled），
+账号 43 绑定 5/14/15/24/25 —— 五个组现在都能生图。
