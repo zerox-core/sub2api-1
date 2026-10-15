@@ -854,6 +854,12 @@
                   {{ createModelAllowlistState.autoStrategy === 'rr' ? 'auto::rr' : 'auto::rand' }}
                 </span>
               </div>
+              <p
+                v-if="createModelAllowlistState.autoEnabled && allowlistHasSelectedPlainAuto(createModelAllowlistState)"
+                class="mt-2 rounded bg-amber-50 px-2 py-1.5 text-[11px] leading-4 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400"
+              >
+                {{ t("admin.groups.modelAllowlist.auto.realModelConflict") }}
+              </p>
             </div>
             <div
               class="max-h-64 space-y-2 overflow-y-auto p-2"
@@ -2535,6 +2541,12 @@
                   {{ editModelAllowlistState.autoStrategy === 'rr' ? 'auto::rr' : 'auto::rand' }}
                 </span>
               </div>
+              <p
+                v-if="editModelAllowlistState.autoEnabled && allowlistHasSelectedPlainAuto(editModelAllowlistState)"
+                class="mt-2 rounded bg-amber-50 px-2 py-1.5 text-[11px] leading-4 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400"
+              >
+                {{ t("admin.groups.modelAllowlist.auto.realModelConflict") }}
+              </p>
             </div>
             <div
               class="max-h-64 space-y-2 overflow-y-auto p-2"
@@ -5387,6 +5399,11 @@ const allowlistSourcesTitle = (modelID: string): string => {
 // 而非本前端注入的 auto sentinel（sentinel 已移入智能路由面板，不出现在列表）。
 const isRealAutoModel = (modelID: string): boolean =>
   modelID.toLowerCase() === "auto" && allowlistSourcesLabel(modelID) !== "";
+
+// allowlistHasSelectedPlainAuto：列表中勾选了裸 auto 条目（真实 auto 模型）。
+// 此时开启智能路由会让网关接管 auto 请求，真实模型不可达，面板需给出警示。
+const allowlistHasSelectedPlainAuto = (state: typeof createModelAllowlistState): boolean =>
+  state.items.some((item) => item.selected && item.id.toLowerCase() === "auto");
 
 const moveCreateModelAllowlistItem = (fromIndex: number, toIndex: number) => {
   moveModelAllowlistItem(createModelAllowlistState, fromIndex, toIndex);

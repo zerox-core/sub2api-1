@@ -1161,7 +1161,8 @@ export default {
           strategyRR: '轮询（顺序均摊）',
           strategyRand: '随机',
           realModelTag: '真实模型',
-          realModelTooltip: '这是上游账号真实提供的 auto 模型（非本面板的智能路由）；勾选后请求 auto 将直接转发给该模型。'
+          realModelTooltip: '这是上游账号真实提供的 auto 模型（非本面板的智能路由）；勾选后请求 auto 将直接转发给该模型。',
+          realModelConflict: '检测到真实 auto 模型条目：智能路由开启后，请求 auto 会由网关改写为候选池内模型，真实 auto 模型不会被调用（如需直连真实模型，请关闭本面板并取消勾选）。'
         },
         errors: {
           empty: '请输入模型条目',
