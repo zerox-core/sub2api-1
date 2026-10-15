@@ -166,8 +166,20 @@ type ChannelService struct {
 	pricingService       *PricingService // 用于「可用渠道」展示时回落到全局定价；可为 nil（测试场景）
 	cachePubSub          ChannelCachePubSub
 
+	// autoRouter 分组级「原生 auto」解析器；为 nil 时完全不影响既有行为。
+	// 由 ProvideChannelService 在装配阶段注入。
+	autoRouter *AutoRouter
+
 	cache   atomic.Value // *channelCache
 	cacheSF singleflight.Group
+}
+
+// SetAutoRouter 注入分组级 auto 解析器（装配阶段调用）。
+func (s *ChannelService) SetAutoRouter(router *AutoRouter) {
+	if s == nil {
+		return
+	}
+	s.autoRouter = router
 }
 
 // NewChannelService 创建渠道服务实例。
@@ -593,9 +605,22 @@ func (s *ChannelService) IsModelRestricted(ctx context.Context, groupID int64, m
 // ResolveChannelMappingAndRestrict 解析渠道映射。
 // 返回映射结果。模型限制检查已移至调度阶段（GatewayService.checkChannelPricingRestriction），
 // restricted 始终返回 false，保留签名兼容性。
+//
+// 顺序很重要：先解析「分组级 auto」（模型白名单含 auto::rr / auto::rand sentinel 时才生效），
+// 未命中再走渠道映射。auto 命中时直接把请求模型改写为候选池里选中的具体模型，
+// 并标记 BillingModelSource=channel_mapped，使计费按选中模型进行、映射链记为 auto→X。
 func (s *ChannelService) ResolveChannelMappingAndRestrict(ctx context.Context, groupID *int64, model string) (ChannelMappingResult, bool) {
 	if groupID == nil {
 		return ChannelMappingResult{MappedModel: model}, false
+	}
+	if s.autoRouter != nil {
+		if picked, ok := s.autoRouter.Resolve(ctx, *groupID, model); ok {
+			return ChannelMappingResult{
+				MappedModel:        picked,
+				Mapped:             true,
+				BillingModelSource: BillingModelSourceChannelMapped,
+			}, false
+		}
 	}
 	lk, _ := s.lookupGroupChannel(ctx, *groupID)
 	if lk == nil {

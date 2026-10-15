@@ -105,6 +105,11 @@ func (a GroupModelAllowlist) Allows(model string) bool {
 		if entry == "" {
 			continue
 		}
+		// auto sentinel（auto::rr / auto::rand）同时放行它的客户端书写名（如 auto），
+		// 否则开启 auto 后请求会在白名单准入阶段被拒。
+		if name, _, ok := ParseAutoSentinel(entry); ok {
+			entry = name
+		}
 		for _, candidate := range candidates {
 			if groupAllowlistPatternMatches(entry, candidate) {
 				return true

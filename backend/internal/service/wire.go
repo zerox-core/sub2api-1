@@ -962,7 +962,7 @@ var ProviderSet = wire.NewSet(
 	ProvideScheduledTestService,
 	ProvideScheduledTestRunnerService,
 	NewGroupCapacityService,
-	NewChannelService,
+	ProvideChannelService,
 	wire.Bind(new(ChannelCacheInvalidator), new(*ChannelService)),
 	NewModelPricingResolver,
 	NewModelPlazaService,
@@ -980,6 +980,25 @@ var ProviderSet = wire.NewSet(
 	NewChannelMonitorRequestTemplateService,
 	ProvideUserPlatformQuotaUsageFlusher,
 )
+
+// ProvideChannelService 创建渠道服务，并注入分组级「原生 auto」解析器。
+// auto 解析器依赖：
+//   - AccountRepository：算出该分组当前可调度账号真正能服务的模型集合（含限流/过载过滤）
+//   - GroupRepository：读取分组模型白名单，识别 auto::rr / auto::rand sentinel
+//   - redis.Client：多实例共享轮询计数（严格等权轮询）
+func ProvideChannelService(
+	repo ChannelRepository,
+	groupRepo GroupRepository,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	pricingService *PricingService,
+	cachePubSub ChannelCachePubSub,
+	accountRepository AccountRepository,
+	redisClient *redis.Client,
+) *ChannelService {
+	svc := NewChannelService(repo, groupRepo, authCacheInvalidator, pricingService, cachePubSub)
+	svc.SetAutoRouter(NewAutoRouter(accountRepository, groupRepo, redisClient))
+	return svc
+}
 
 // ProvideUserPlatformQuotaUsageFlusher 创建并启动 UserPlatformQuotaUsageFlusher。
 func ProvideUserPlatformQuotaUsageFlusher(cfg *config.Config, cache BillingCache, quotaRepo UserPlatformQuotaRepository, tw *TimingWheelService) *UserPlatformQuotaUsageFlusher {
