@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/braheezy/shine-mp3/pkg/mp3"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
@@ -23,6 +25,7 @@ import (
 // 百炼兼容模式没有 /v1/audio/speech（实测 404），语音合成只能走原生
 // POST /api/v1/services/aigc/multimodal-generation/generation，
 // 它同步返回音频 URL（OSS），所以网关需要二次下载再回给客户端。
+//
 // 计费口径与既有 audio relay 完全一致：字符数 × 模型价格比 -> AudioUsage{Mode:"tts"}。
 
 // dashScopeTTSDefaultVoice 是未指定 voice 时的默认音色。
@@ -56,6 +59,22 @@ func dashScopeTTSTextFromBody(body []byte) string {
 	return strings.TrimSpace(gjson.GetBytes(body, "input").String())
 }
 
+// dashScopeTTSOutputFormat 返回客户端期望的音频格式。
+// OpenAI /v1/audio/speech 默认 mp3；本网关音频代理用 `response_format`。
+func dashScopeTTSOutputFormat(body []byte) string {
+	if !gjson.ValidBytes(body) {
+		return "mp3"
+	}
+	format := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "response_format").String()))
+	if format == "" {
+		format = strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "format").String()))
+	}
+	if format == "" {
+		return "mp3"
+	}
+	return format
+}
+
 // dashScopeNativeClientError 写回 OpenAI 风格错误并返回该错误。
 //
 // audio relay 的 handler 在 result == nil 时直接返回而不写响应，因此适配器
@@ -86,15 +105,17 @@ func (s *OpenAIGatewayService) forwardRelayAudioSpeechDashScopeNative(
 		upstreamModel = model
 	}
 	voice := dashScopeTTSVoice(gjson.GetBytes(body, "voice").String())
+	outputFormat := dashScopeTTSOutputFormat(body)
 
 	logger.LegacyPrintf(
 		"service.openai_gateway",
-		"[OpenAI] Audio speech routing request_model=%s upstream_model=%s endpoint=%s adapter=dashscope-native voice=%s chars=%d",
+		"[OpenAI] Audio speech routing request_model=%s upstream_model=%s endpoint=%s adapter=dashscope-native voice=%s chars=%d format=%s",
 		model,
 		upstreamModel,
 		dashScopeNativeMultimodalGenerationPath,
 		voice,
 		RelayAudioEstimateChars(text),
+		outputFormat,
 	)
 
 	payload, err := json.Marshal(map[string]any{
@@ -170,6 +191,18 @@ func (s *OpenAIGatewayService) forwardRelayAudioSpeechDashScopeNative(
 		return nil, dashScopeNativeClientError(c, http.StatusBadGateway, "api_error",
 			"failed to fetch synthesized audio")
 	}
+
+	// 百炼 TTS 只输出 WAV（官方接口没有格式参数），而 OpenAI 客户端默认要 mp3，
+	// 所以在网关侧做一次纯 Go 转码；转码失败时回退返回原始 WAV。
+	if outputFormat == "mp3" && isDashScopeWAVPayload(audioBytes) {
+		if encoded, encErr := dashScopeWAVToMP3(audioBytes); encErr == nil {
+			audioBytes = encoded
+			contentType = "audio/mpeg"
+		} else {
+			logger.L().Warn("relay_audio.dashscope_mp3_transcode_failed",
+				zap.Int64("account_id", account.ID), zap.Error(encErr))
+		}
+	}
 	c.Data(http.StatusOK, contentType, audioBytes)
 
 	chars := RelayAudioEstimateChars(text)
@@ -226,6 +259,92 @@ func (s *OpenAIGatewayService) downloadDashScopeAudio(
 		contentType = dashScopeAudioContentType(parsed.Path)
 	}
 	return contentType, data, nil
+}
+
+func isDashScopeWAVPayload(data []byte) bool {
+	return len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WAVE"
+}
+
+// dashScopeWAVToMP3 把百炼返回的 PCM WAV 转成 MP3。
+// 用纯 Go 的 Shine 编码器，因此不需要 CGO，也不需要在运行镜像里装 ffmpeg。
+func dashScopeWAVToMP3(wav []byte) ([]byte, error) {
+	samples, sampleRate, channels, err := parseDashScopePCMWAV(wav)
+	if err != nil {
+		return nil, err
+	}
+	if len(samples) == 0 {
+		return nil, fmt.Errorf("wav payload contains no pcm samples")
+	}
+	encoder := mp3.NewEncoder(sampleRate, channels)
+	// 必须用 Write：它内部按 samplesPerPass 循环，
+	// 而 EncodeBufferInterleaved 每调用一次只产出一帧（约 0.05 秒）。
+	var buf bytes.Buffer
+	if err := encoder.Write(&buf, samples); err != nil {
+		return nil, fmt.Errorf("encode mp3: %w", err)
+	}
+	if buf.Len() == 0 {
+		return nil, fmt.Errorf("mp3 encoder produced no output")
+	}
+	return buf.Bytes(), nil
+}
+
+// parseDashScopePCMWAV 解析 16-bit PCM 的 RIFF/WAVE（百炼 TTS 的固定输出形态）。
+func parseDashScopePCMWAV(data []byte) ([]int16, int, int, error) {
+	if !isDashScopeWAVPayload(data) {
+		return nil, 0, 0, fmt.Errorf("not a RIFF/WAVE payload")
+	}
+	var (
+		channels   int
+		sampleRate int
+		bitDepth   int
+		audioFmt   int
+		haveFmt    bool
+	)
+	for offset := 12; offset+8 <= len(data); {
+		id := string(data[offset : offset+4])
+		size := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		body := offset + 8
+		if size < 0 || body+size > len(data) {
+			// 部分写入器把最后一个 chunk 的长度写大；data 块按实际剩余长度兜底。
+			if id == "data" {
+				size = len(data) - body
+			} else {
+				break
+			}
+		}
+		chunk := data[body : body+size]
+		switch id {
+		case "fmt ":
+			if len(chunk) < 16 {
+				return nil, 0, 0, fmt.Errorf("wav fmt chunk is truncated")
+			}
+			audioFmt = int(binary.LittleEndian.Uint16(chunk[0:2]))
+			channels = int(binary.LittleEndian.Uint16(chunk[2:4]))
+			sampleRate = int(binary.LittleEndian.Uint32(chunk[4:8]))
+			bitDepth = int(binary.LittleEndian.Uint16(chunk[14:16]))
+			haveFmt = true
+		case "data":
+			if !haveFmt {
+				return nil, 0, 0, fmt.Errorf("wav data chunk precedes fmt chunk")
+			}
+			if audioFmt != 1 || bitDepth != 16 {
+				return nil, 0, 0, fmt.Errorf("unsupported wav format: audioFormat=%d bits=%d", audioFmt, bitDepth)
+			}
+			if channels <= 0 || sampleRate <= 0 {
+				return nil, 0, 0, fmt.Errorf("wav fmt chunk is incomplete")
+			}
+			samples := make([]int16, len(chunk)/2)
+			for i := range samples {
+				samples[i] = int16(binary.LittleEndian.Uint16(chunk[i*2 : i*2+2]))
+			}
+			return samples, sampleRate, channels, nil
+		}
+		offset = body + size
+		if size%2 == 1 {
+			offset++
+		}
+	}
+	return nil, 0, 0, fmt.Errorf("wav data chunk not found")
 }
 
 func dashScopeAudioContentType(path string) string {
