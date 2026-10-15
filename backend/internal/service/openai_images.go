@@ -515,6 +515,12 @@ func validateCompatibleImagesModel(model string) error {
 	if isGeminiCompatibleImageModel(model) {
 		return nil
 	}
+	// 百炼生图模型（qwen-image-*、wan2.7-image、z-image-* …）在百炼兼容模式下没有
+	// /images/generations 端点，但可通过原生 multimodal-generation 调用，
+	// 由 forwardOpenAIImagesDashScopeNative 负责协议转换，故在此放行。
+	if isDashScopeNativeImageModel(model) {
+		return nil
+	}
 	return validateOpenAIImagesModel(model)
 }
 
@@ -629,6 +635,10 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	requestModel := strings.TrimSpace(parsed.Model)
 	if mapped := strings.TrimSpace(channelMappedModel); mapped != "" {
 		requestModel = mapped
+	}
+	// 百炼账号的兼容模式没有 /images/generations 端点（404），改走原生适配。
+	if nativeBase, ok := dashScopeNativeBaseURL(account); ok {
+		return s.forwardOpenAIImagesDashScopeNative(ctx, c, account, parsed, requestModel, nativeBase, startTime)
 	}
 	if err := validateCompatibleImagesModel(requestModel); err != nil {
 		return nil, err
