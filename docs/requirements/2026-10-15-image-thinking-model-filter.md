@@ -1,7 +1,7 @@
 # 需求梳理：生图路由 / 思考挡位 / 模型能力过滤
 
 日期：2026-10-15
-状态：**待用户确认**（本文档只梳理，不含实现）
+状态：**4 项决策已确认（见第三节）；P0（国模/羊毛组关生图）已于 2026-10-15 执行并验证（见第五节）**
 
 ---
 
@@ -17,8 +17,8 @@
 | 23 反重力 (Copy ) | **gemini 自用**（独占，key 27） | 是 | 40 丽珠(组内优先级 10) → 5 zyuou(50) 兜底 | 无 |
 | 12 反重力 | **gemini 对外公开**（key 54） | 是 | 强制 `gpt-image-*` → 账号 5「zyuou-生图原价」 | `{"gpt-image-*":[5]}` |
 | 11 claude-生图 | **专门生图组**（无 key，纯供给池） | 是 | 5 zyuou | `{"gpt-image-*":[5]}` |
-| 5 国模 | 国产 LLM | **是（需关）** | 组内无生图账号 | `{"gpt-image-*":[5]}`（routing 已关闭） |
-| 14 免费快快的薅羊毛 | 羊毛池 | **是（需关）** | 43 百炼 | 无 |
+| 5 国模 | 国产 LLM | **否（2026-10-15 已关）** | 组内无生图账号 | `{"gpt-image-*":[5]}`（routing 已关闭） |
+| 14 免费快快的薅羊毛 | 羊毛池 | **否（2026-10-15 已关，189→154）** | 43 百炼 | 无 |
 | 8 丽珠组 | 自用丽珠直连 | 是 | 40 丽珠 | 无 |
 | 15 大羊毛 | — | 否 | — | 无 |
 
@@ -103,18 +103,14 @@
   3. 补 `gpt-image-1/1.5` 的丽珠来源（或确认这两个模型就该只走 zyuou）。
   4. 决定分组 8（自用丽珠组）是否也要同样的路由策略。
 
-### R2 国模 / 薅羊毛关闭生图，但保留多模态
+### R2 国模 / 薅羊毛关闭生图，但保留多模态 —— **已执行（P0）**
 
 - 目标：分组 5、14 不提供生图；视觉理解（图片输入）能力保留。
-- 待办：
-  1. 分组 5：`allow_image_generation: true → false`；清掉 `model_routing` 里的 `gpt-image-*`
-     （白名单本身无生图模型）。
-  2. 分组 14：`allow_image_generation → false`；从白名单移除 **12 个生图模型**
-     （`qwen-image-2.0*` 系列 9 个、`wan2.7-image`、`wan2.7-image-pro`、`z-image-turbo`）
-     与 **8 个语音模型**（`MiniMax/speech-*` 4 个、`fun-asr-flash-*`、`qwen-audio-3.0-asr-flash`、
-     `qwen3-asr-flash-realtime`、`qwen3-tts-flash`）——**语音是否保留需确认**。
-  3. 保留视觉理解模型（如 `qwen3-vl-plus`、`qwen-vl-ocr*`、`qwen3.5-ocr`、`qwen3.8-omni-flash`）。
-  4. 15（大羊毛）已是关闭状态，无需处理。
+- 结果：分组 5、14 的 `allow_image_generation` 已置 `false`；分组 14 白名单 189 → **154**，
+  移除 **35 个**非文本模型（12 生图 + 23 语音/实时类），保留 11 个多模态模型。
+  分组 5 白名单本就只有 4 个 LLM，未改动。详见第五节。
+- 排期说明：分组 5 的 `model_routing` 里虽留有 `{"gpt-image-*":[5]}`，但
+  `model_routing_enabled=false` 使其不生效，故本次未改动该字段。
 
 ### R3 Gemini 思考挡位（把"换 id"变成"挡位"）
 
@@ -177,19 +173,27 @@
 
 ---
 
-## 三、待确认问题（阻塞实现）
+## 三、决策记录与剩余待确认
+
+### 已确认（2026-10-15）
+
+| # | 问题 | 决策 |
+| --- | --- | --- |
+| D1 | 分组 14 的语音模型 | **连语音一起移除**（含 `-realtime`、`livetranslate`、`s2s`、`audio-*` 实时类，以及 TTS/ASR） |
+| D2 | 生图收费口径 | **继续用倍率**（公开组 1.2×、自用 1.0×），不引入 `image_price_*` 固定单价 |
+| D3 | 国模"打开思考"语义 | **两者都要**：允许客户端 `reasoning_effort` 切换，且默认给思考型号带上 thinking 参数 |
+| D4 | 账号层真实支持性过滤 | **被动学习**：某模型 404/403/无权限时自动拉黑（管理端可见、可清理） |
+
+### 仍需确认
 
 1. "专门生图组"指分组 11「claude-生图」，还是账号 5 这条供给线？是否需要配置分组级
-   `fallback_group_id`（否则备用只是账号级兜底）。
-2. 生图收费口径：继续 1.2× 倍率，还是要固定单价（`image_price_1k/2k/4k`）？
-3. 分组 14 的 8 个**语音**模型是否也要移除？（你只说了"生图"，语音/ASR 需要明确）
-4. 分组 8（自用丽珠组）是否也要按 R1/R2 重新配置？
-5. R3 的调用方式：客户端是走 OpenAI 兼容 `reasoning_effort`，还是 Gemini 原生
+   `fallback_group_id`（否则"备用"只是账号级兜底，见 1.1 第 3 点）。
+2. 分组 8（自用丽珠组）是否也要按 R1/R2 重新配置。
+3. R3 的调用方式：客户端走 OpenAI 兼容 `reasoning_effort`，还是 Gemini 原生
    `generationConfig.thinkingConfig.thinkingLevel`？（决定实现路径 A 还是 A+B）
-6. R4"打开思考"的语义：(a) 允许挡位切换 / (b) 默认带 thinking 参数 / (c) 两者都要？
-7. R5 的判定方式：被动学习 / 主动探测 / 导入时确认？（主动探测有成本）
-8. R5 举例里的 "copilot"：是哪个账号、在哪个界面看到的模型？（账号 45「Copilot直连」的映射
-   只有 3 个模型，与"扫描出很多"不符，需要定位具体场景）
+4. R5 举例里的 "copilot"：具体是哪个账号、在哪个界面看到"扫描出很多不支持的模型"？
+   （账号 45「Copilot直连」的映射只有 3 个模型，与描述不符，需要定位具体场景）
+5. R6 能力目录来源：是否接受以 `models.dev` 元数据 + 内置规则为准，并允许人工覆盖。
 
 ---
 
@@ -202,3 +206,30 @@
 | P2 | R6 模型能力目录 + R5 被动学习 | 数据层能力，相互依赖 |
 | P3 | R3 Gemini 挡位 + R4 国模思考 | 改动最深，需回归测试计费与限流 |
 | P4 | R5 主动探测（可选） | 有上游成本，视 P2 效果决定 |
+
+---
+
+## 五、已执行变更
+
+### 2026-10-15 P0：国模 / 羊毛组关闭生图
+
+| 对象 | 变更前 | 变更后 |
+| --- | --- | --- |
+| 分组 5「国模」 | `allow_image_generation=true` | `false`（白名单 4 个 LLM 不变） |
+| 分组 14「免费快快的薅羊毛」 | `allow_image_generation=true`，白名单 189 | `false`，白名单 **154** |
+
+- 移除的 **35 个** = 12 个生图（`qwen-image-*` 9 个、`wan2.7-image`、`wan2.7-image-pro`、`z-image-turbo`）
+  + 23 个语音/实时类（`MiniMax/speech-*` 4 个、ASR/TTS 4 个、
+  `*-realtime` / `livetranslate` / `s2s` / `audio-*-realtime` 15 个）。
+- **保留的多模态（11 个）**：`qwen3-vl-plus`、`qwen-vl-ocr`、`qwen-vl-ocr-2025-11-20`、`qwen3.5-ocr`、
+  `vanchin/deepseek-ocr`、`qwen3-omni-flash`、`qwen3.5-omni-flash`、`qwen3.5-omni-flash-2026-03-15`、
+  `qwen3.5-omni-plus`、`qwen3.5-omni-plus-2026-03-15`、`qwen3.8-omni-flash`。
+- 验证（变更后实测）：
+  - 分组 14 `/v1/models`（key 55）→ HTTP 200，**153** 个模型，生图/音频命中 **0**；
+  - 分组 5 `/v1/models`（key 12）→ HTTP 200，3 个模型，生图命中 **0**；
+  - 生图请求 → `404 model_not_found`：`Model "qwen-image-2.0" is not available for this group`。
+- 执行前核对：分组 14 近 30 天实际调用的模型（`auto`、`glm-5.3`、`sensenova-6.8-flash-lite`、
+  `qwen3.8-omni-flash`、`deepseek-*`、`kimi-k3` 等）**没有一个在移除清单内**。
+- 备份：`docs/ops/backup-groups-5-14-20261015.json`（变更前两组的完整配置，含 `model_allowlist`、
+  `allow_image_generation`、`model_routing`）。
+- 回滚：按备份中的原值 `PUT /api/v1/admin/groups/{5,14}` 即可。
