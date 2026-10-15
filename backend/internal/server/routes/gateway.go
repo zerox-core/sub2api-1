@@ -79,8 +79,8 @@ func RegisterGatewayRoutes(
 			h.OpenAIGateway.Images(c)
 		case service.PlatformGrok:
 			h.OpenAIGateway.GrokImages(c)
-		case service.PlatformAnthropic:
-			// claude 分组复用生图账号（跨平台绑定）时走 OpenAI 图片转发，
+		case service.PlatformAnthropic, service.PlatformAntigravity:
+			// claude / antigravity 分组复用生图账号（跨平台绑定）时走 OpenAI 图片转发，
 			// 账号选择层按分组成员+账号平台选号，与音频中继补丁同构。
 			h.OpenAIGateway.Images(c)
 		default:
