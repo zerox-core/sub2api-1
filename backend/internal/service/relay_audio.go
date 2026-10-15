@@ -156,6 +156,10 @@ func (s *OpenAIGatewayService) ForwardRelayAudioSpeech(
 	body []byte,
 ) (*OpenAIForwardResult, error) {
 	started := time.Now()
+	// 百炼账号的兼容模式没有 /v1/audio/speech（404），改走原生 TTS 适配。
+	if nativeBase, ok := dashScopeNativeBaseURL(account); ok {
+		return s.forwardRelayAudioSpeechDashScopeNative(ctx, c, account, body, nativeBase, started)
+	}
 	data, hdr, err := s.doRelayAudioRequest(ctx, c, account, http.MethodPost, "/v1/audio/speech", body)
 	if err != nil {
 		return nil, err

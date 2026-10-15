@@ -512,6 +512,10 @@ func isGeminiCompatibleImageModel(model string) bool {
 }
 
 func validateCompatibleImagesModel(model string) error {
+	// 百炼生图模型在兼容模式下没有可用端点，由原生 multimodal-generation 承载。
+	if isDashScopeNativeImageModel(model) {
+		return nil
+	}
 	if isGeminiCompatibleImageModel(model) {
 		return nil
 	}
@@ -629,6 +633,10 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	requestModel := strings.TrimSpace(parsed.Model)
 	if mapped := strings.TrimSpace(channelMappedModel); mapped != "" {
 		requestModel = mapped
+	}
+	// 百炼账号的兼容模式没有 /images/generations 端点（404），改走原生适配。
+	if nativeBase, ok := dashScopeNativeBaseURL(account); ok {
+		return s.forwardOpenAIImagesDashScopeNative(ctx, c, account, parsed, requestModel, nativeBase, startTime)
 	}
 	if err := validateCompatibleImagesModel(requestModel); err != nil {
 		return nil, err
