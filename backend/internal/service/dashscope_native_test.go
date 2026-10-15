@@ -1,7 +1,10 @@
 package service
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -167,4 +170,115 @@ func TestDashScopeTTSTextFromBody(t *testing.T) {
 	require.Equal(t, "", dashScopeTTSTextFromBody([]byte(`{"model":"qwen3-tts-flash"}`)))
 	require.Equal(t, "", dashScopeTTSTextFromBody([]byte(`not json`)))
 	require.Equal(t, "", dashScopeTTSTextFromBody(nil))
+}
+
+// buildTestPCMWAV 生成 16-bit PCM 的 RIFF/WAVE，用于转码测试。
+func buildTestPCMWAV(sampleRate, channels int, samples []int16) []byte {
+	var buf bytes.Buffer
+	dataLen := len(samples) * 2
+	buf.WriteString("RIFF")
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(36+dataLen))
+	buf.WriteString("WAVE")
+	buf.WriteString("fmt ")
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(channels))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(sampleRate))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(sampleRate*channels*2))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(channels*2))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(16))
+	buf.WriteString("data")
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(dataLen))
+	for _, sample := range samples {
+		_ = binary.Write(&buf, binary.LittleEndian, sample)
+	}
+	return buf.Bytes()
+}
+
+// 百炼只回 WAV，网关必须能自己产出 mp3（客户端默认 response_format=mp3）。
+func TestDashScopeWAVToMP3(t *testing.T) {
+	const sampleRate = 24000
+	samples := make([]int16, sampleRate/5) // 0.2s
+	for i := range samples {
+		samples[i] = int16(12000 * math.Sin(2*math.Pi*440*float64(i)/sampleRate))
+	}
+	wav := buildTestPCMWAV(sampleRate, 1, samples)
+	require.True(t, isDashScopeWAVPayload(wav))
+
+	encoded, err := dashScopeWAVToMP3(wav)
+	require.NoError(t, err)
+	require.NotEmpty(t, encoded)
+	// MP3 帧同步字：11 个 1 位，即 0xFF 后高 3 位全 1
+	require.Equal(t, byte(0xFF), encoded[0])
+	require.Equal(t, byte(0xE0), encoded[1]&0xE0)
+}
+
+func TestDashScopeWAVToMP3Stereo(t *testing.T) {
+	const sampleRate = 24000
+	samples := make([]int16, sampleRate/10*2)
+	for i := range samples {
+		samples[i] = int16(6000 * math.Sin(2*math.Pi*220*float64(i)/sampleRate))
+	}
+	encoded, err := dashScopeWAVToMP3(buildTestPCMWAV(sampleRate, 2, samples))
+	require.NoError(t, err)
+	require.NotEmpty(t, encoded)
+}
+
+// 回归：EncodeBufferInterleaved 只输出一帧，曾导致 2 秒音频只转出 0.25 秒。
+// 128 kbps 下输出长度必须与音频时长匹配，才能证明整段都被编码。
+func TestDashScopeWAVToMP3CoversWholeInput(t *testing.T) {
+	const (
+		sampleRate = 24000
+		seconds    = 2
+	)
+	samples := make([]int16, sampleRate*seconds)
+	for i := range samples {
+		samples[i] = int16(9000 * math.Sin(2*math.Pi*330*float64(i)/sampleRate))
+	}
+	encoded, err := dashScopeWAVToMP3(buildTestPCMWAV(sampleRate, 1, samples))
+	require.NoError(t, err)
+
+	// 24kHz 单声道 128kbps -> 384 字节/帧，576 样本/帧
+	t.Logf("input samples=%d (%.2fs) encoded=%d bytes frames=%d",
+		len(samples), float64(len(samples))/sampleRate, len(encoded), len(encoded)/384)
+
+	expected := float64(seconds) * 128000 / 8 // 128 kbps
+	require.InDelta(t, expected, float64(len(encoded)), expected*0.4)
+}
+
+// 帧数必须与输入样本数一致（24kHz 单声道 128kbps -> 576 样本/384 字节每帧），
+// 覆盖长音频，防止编码器在多次 pass 时丢帧或重复输出。
+func TestDashScopeWAVToMP3FrameCountMatchesInput(t *testing.T) {
+	const sampleRate = 24000
+	for _, seconds := range []int{1, 2, 8, 20} {
+		samples := make([]int16, sampleRate*seconds)
+		for i := range samples {
+			samples[i] = int16(8000 * math.Sin(2*math.Pi*440*float64(i)/sampleRate))
+		}
+		encoded, err := dashScopeWAVToMP3(buildTestPCMWAV(sampleRate, 1, samples))
+		require.NoError(t, err)
+		frames := len(encoded) / 384
+		wantFrames := (len(samples) + 575) / 576
+		require.InDelta(t, wantFrames, frames, 2, "seconds=%d", seconds)
+	}
+}
+
+func TestDashScopeWAVToMP3RejectsBadInput(t *testing.T) {
+	_, err := dashScopeWAVToMP3([]byte("not a wav at all"))
+	require.Error(t, err)
+
+	// 8-bit PCM 不受支持，必须显式报错而不是产出垃圾音频
+	eightBit := buildTestPCMWAV(24000, 1, []int16{0, 1, 2, 3})
+	eightBit[34], eightBit[35] = 8, 0
+	_, err = dashScopeWAVToMP3(eightBit)
+	require.Error(t, err)
+}
+
+func TestDashScopeTTSOutputFormat(t *testing.T) {
+	// 缺省按 OpenAI 约定为 mp3
+	require.Equal(t, "mp3", dashScopeTTSOutputFormat([]byte(`{"model":"x"}`)))
+	require.Equal(t, "mp3", dashScopeTTSOutputFormat(nil))
+	require.Equal(t, "mp3", dashScopeTTSOutputFormat([]byte(`{"response_format":"MP3"}`)))
+	require.Equal(t, "wav", dashScopeTTSOutputFormat([]byte(`{"response_format":"wav"}`)))
+	require.Equal(t, "opus", dashScopeTTSOutputFormat([]byte(`{"format":"opus"}`)))
 }
