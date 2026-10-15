@@ -65,9 +65,10 @@ ssh zeroxcore 'sudo STAGE=/home/ubuntu/fe_stage_xxx bash /tmp/fe_publish_design.
 4. 打包 JS 必须含 `plaza-data.json`（广场必须是数据驱动，不能是演示数据）；
 5. CSS 必须含 `#07080c` 与 `custom-open-fab`（Cosmic 设计）。
 
-**注意**：仓库里的 `fe_publish_design.sh` 是 BOM + CRLF，服务端 `bash` 会以
-`syntax error near unexpected token '('` 直接失败。发布请用 `fe_publish_design_ascii.sh`
-（纯 ASCII + LF，检查项完全一致，另加 `auto::rr` 一条）。
+**注意**：本脚本历史上入库时是「UTF-8 双重编码 + BOM + CRLF」的损坏副本，服务端 `bash`
+会以 `syntax error near unexpected token '('` 直接失败（正文里换行丢失导致引号失衡）。
+2026-10-15 已重写为纯 ASCII + LF 并加入 `auto::rr` 检查，`bash -n` 校验通过；
+`.gitattributes` 的 `*.sh text eol=lf` 保证不再被转成 CRLF。
 
 发布只覆盖 `index.html`、`assets/index-*.js`、`assets/style-*.css`、`logo.svg`；
 `plaza-data.json`（后台定时生成，约每 10 分钟刷新）与历史 assets 一律保留。

@@ -20,3 +20,5 @@ backend/migrations/*.sql text eol=lf
 
 # Dockerfile
 Dockerfile text eol=lf
+
+docs/frontend-design/*.patch text eol=lf
