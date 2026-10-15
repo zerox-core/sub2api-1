@@ -278,3 +278,50 @@
 
 - 备份：`docs/ops/backup-groups-5-14-15-before-image-relink.json`
 - 备注：分组 5 当前唯一可调度账号是 41「WorkBuddy直连」（账号 42 火山仍在 403 冷却）。
+
+### 2026-10-15 P2：百炼原生适配实现（已上线并验证）
+
+用户决策：**给网关加百炼原生适配**。实现（commit `b23139de0` + `6bb0fce07`）：
+
+| 位置 | 改动 |
+| --- | --- |
+| `service/openai_images_dashscope.go`（新增） | 账号 base_url 主机为 `dashscope[.intl].aliyuncs.com` 时，把 OpenAI images 请求翻译成原生 `multimodal-generation` 请求体，再把原生响应（`output.choices[].message.content[].image`）改写成 OpenAI images 响应，之后复用既有收尾（b64 回填 / 图片计数 / 计费） |
+| `service/relay_audio_dashscope.go`（新增） | 同思路的语音合成：构建原生 TTS 请求体 → 下载返回的 OSS 音频 → 以正确 Content-Type 写回；计费仍按字符数 × 模型价格比（`AudioUsage{Mode:"tts"}`） |
+| `service/openai_images.go`（+8 行） | `validateCompatibleImagesModel` 放行百炼生图模型族（`qwen-image*` / `wan2.7-image*` / `wanx*` / `z-image*`）；`forwardOpenAIImagesAPIKey` 入口分流到原生适配 |
+| `service/relay_audio.go`（+4 行） | `ForwardRelayAudioSpeech` 入口分流到原生 TTS 适配 |
+
+分流只按**账号 base_url 主机**判定，其它 OpenAI 账号的既有路径不变。
+
+#### 联调中发现并修复的两个缺陷（`6bb0fce07`）
+
+1. **字段名**：本网关 audio relay 读 `text`（audio-proxy 约定），而 OpenAI SDK 发 `input`。
+   只发 `input` 的请求会拿到空文本。适配器现在两者都接受（`text` 优先）。
+2. **静默 200**：audio handler 在 `result == nil` 时直接 return 而**不写响应**，
+   于是适配器自身的错误（如空文本）表现为**空的 HTTP 200**。适配器现在自己写
+   OpenAI 风格错误体，失败可见为 400/502。
+
+#### ✅ 上线验证（镜像 `sub2api-ag-quota:dashscope-native2-20261015`）
+
+| 场景 | 结果 |
+| --- | --- |
+| 分组 24 生图 `qwen-image-2.0` | **200** + 图片 URL（2048×2048），usage 记录 `image_count=1` |
+| 分组 14 生图 `z-image-turbo` | **200** + 图片 URL（1024×1536） |
+| 分组 25 配音 `qwen3-tts-flash`（`text` 字段） | **200**，`audio/x-wav`，103 724 字节（RIFF/WAVE 头正确） |
+| 分组 25 配音（`input` 字段，OpenAI SDK 写法） | **200**，76 844 字节 |
+| 空文本容错 | **400** + `invalid_request_error`（不再是空 200） |
+| 网关日志 | `adapter=dashscope-native`（生图 / 配音各一行，含 voice 与字符数） |
+
+已为用户 1 建好两个网关 Key：**id 57 → 分组 24「羊毛组生图」，id 58 → 分组 25「羊毛语音组」**
+（密钥页可直接复制）。
+
+#### 遗留
+
+1. **配音输出格式**：百炼原生返回 WAV；客户端传 `response_format=mp3` 目前仍得到 WAV
+   （Content-Type 正确）。要真 mp3 需在原生 `parameters.format` 指定或网关侧转码。
+2. **分组 5「国模」生图仍不可用**：该组只绑定了账号 41，百炼账号 43 **未绑定分组 5**，
+   因此 `model_routing` 里指向 43 的规则在该组无效（报 `model_not_supported`）。
+   按用户「国模和薅羊毛组都不配置生图」的要求，分组 5/14/15 的生图模型与
+   `model_routing` 本应**移除**（而 14/15 目前反而可用）—— **待用户确认后再动**。
+3. `relay_audio_dashscope.go` 目前把音频 URL 全量读入内存后写回；
+   若后续出现大音频，需要改为流式透传（`writeGrokMediaContentResponse` 已具备该形态）。
+4. R1 / R3 / R5 / R6 / R7 仍未实现。
