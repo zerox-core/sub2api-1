@@ -155,3 +155,16 @@ func TestDashScopeAudioContentType(t *testing.T) {
 	require.Equal(t, "audio/mpeg", dashScopeAudioContentType("/x/y.mp3"))
 	require.Equal(t, "audio/mpeg", dashScopeAudioContentType("/x/y"))
 }
+
+// 网关的 audio-proxy 约定用 text，OpenAI SDK 用 input，两者都必须可用于合成。
+func TestDashScopeTTSTextFromBody(t *testing.T) {
+	require.Equal(t, "你好", dashScopeTTSTextFromBody([]byte(`{"model":"qwen3-tts-flash","text":"你好"}`)))
+	require.Equal(t, "hello", dashScopeTTSTextFromBody([]byte(`{"model":"qwen3-tts-flash","input":"hello"}`)))
+	// text 优先于 input
+	require.Equal(t, "a", dashScopeTTSTextFromBody([]byte(`{"text":"a","input":"b"}`)))
+	// 全空白视为缺失，避免向上游发空文本
+	require.Equal(t, "", dashScopeTTSTextFromBody([]byte(`{"text":"   ","input":""}`)))
+	require.Equal(t, "", dashScopeTTSTextFromBody([]byte(`{"model":"qwen3-tts-flash"}`)))
+	require.Equal(t, "", dashScopeTTSTextFromBody([]byte(`not json`)))
+	require.Equal(t, "", dashScopeTTSTextFromBody(nil))
+}

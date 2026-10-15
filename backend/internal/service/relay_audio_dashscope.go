@@ -12,8 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"go.uber.org/zap"
 )
 
 // 百炼（DashScope）原生 TTS 适配。
@@ -41,6 +43,30 @@ func dashScopeTTSVoice(raw string) string {
 	return strings.TrimSpace(raw)
 }
 
+// dashScopeTTSTextFromBody 提取待合成文本。
+// 本网关的音频代理历史上用 `text` 字段（audio-proxy 协议），而 OpenAI 官方
+// SDK 用 `input`；两者都接受，`text` 优先。
+func dashScopeTTSTextFromBody(body []byte) string {
+	if text := strings.TrimSpace(RelayAudioTTSTextFromBody(body)); text != "" {
+		return text
+	}
+	if !gjson.ValidBytes(body) {
+		return ""
+	}
+	return strings.TrimSpace(gjson.GetBytes(body, "input").String())
+}
+
+// dashScopeNativeClientError 写回 OpenAI 风格错误并返回该错误。
+//
+// audio relay 的 handler 在 result == nil 时直接返回而不写响应，因此适配器
+// 自己产生的错误必须在这里写掉，否则客户端只会看到一个空的 200。
+func dashScopeNativeClientError(c *gin.Context, status int, errType, message string) error {
+	if c != nil && c.Writer != nil && !c.Writer.Written() {
+		c.JSON(status, gin.H{"error": gin.H{"message": message, "type": errType}})
+	}
+	return fmt.Errorf("%s", message)
+}
+
 func (s *OpenAIGatewayService) forwardRelayAudioSpeechDashScopeNative(
 	ctx context.Context,
 	c *gin.Context,
@@ -50,15 +76,26 @@ func (s *OpenAIGatewayService) forwardRelayAudioSpeechDashScopeNative(
 	started time.Time,
 ) (*OpenAIForwardResult, error) {
 	model := RelayAudioTTSModelFromBody(body)
-	text := RelayAudioTTSTextFromBody(body)
-	if strings.TrimSpace(text) == "" {
-		return nil, fmt.Errorf("audio speech request requires text")
+	text := dashScopeTTSTextFromBody(body)
+	if text == "" {
+		return nil, dashScopeNativeClientError(c, http.StatusBadRequest, "invalid_request_error",
+			"audio speech request requires a non-empty text or input field")
 	}
 	upstreamModel, mapped := account.ResolveMappedModel(model)
 	if !mapped || strings.TrimSpace(upstreamModel) == "" {
 		upstreamModel = model
 	}
 	voice := dashScopeTTSVoice(gjson.GetBytes(body, "voice").String())
+
+	logger.LegacyPrintf(
+		"service.openai_gateway",
+		"[OpenAI] Audio speech routing request_model=%s upstream_model=%s endpoint=%s adapter=dashscope-native voice=%s chars=%d",
+		model,
+		upstreamModel,
+		dashScopeNativeMultimodalGenerationPath,
+		voice,
+		RelayAudioEstimateChars(text),
+	)
 
 	payload, err := json.Marshal(map[string]any{
 		"model": upstreamModel,
@@ -68,7 +105,8 @@ func (s *OpenAIGatewayService) forwardRelayAudioSpeechDashScopeNative(
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("encode dashscope tts payload: %w", err)
+		return nil, dashScopeNativeClientError(c, http.StatusInternalServerError, "api_error",
+			"failed to encode speech request")
 	}
 
 	upstreamCtx, release := detachUpstreamContext(ctx)
@@ -76,7 +114,10 @@ func (s *OpenAIGatewayService) forwardRelayAudioSpeechDashScopeNative(
 
 	req, err := s.buildDashScopeNativeRequest(upstreamCtx, account, nativeBase, payload)
 	if err != nil {
-		return nil, err
+		logger.L().Error("relay_audio.dashscope_request_build_failed",
+			zap.Int64("account_id", account.ID), zap.Error(err))
+		return nil, dashScopeNativeClientError(c, http.StatusBadGateway, "api_error",
+			"failed to build upstream speech request")
 	}
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -92,11 +133,16 @@ func (s *OpenAIGatewayService) forwardRelayAudioSpeechDashScopeNative(
 
 	nativeBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
-		return nil, err
+		return nil, dashScopeNativeClientError(c, http.StatusBadGateway, "api_error",
+			"failed to read upstream speech response")
 	}
 	requestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
 
 	if resp.StatusCode >= 400 {
+		logger.L().Warn("relay_audio.dashscope_upstream_error",
+			zap.Int64("account_id", account.ID),
+			zap.Int("status_code", resp.StatusCode),
+			zap.String("upstream_model", upstreamModel))
 		openAIBody := dashScopeNativeErrorBodyToOpenAI(nativeBody)
 		synthetic := &http.Response{
 			StatusCode: resp.StatusCode,
@@ -111,11 +157,18 @@ func (s *OpenAIGatewayService) forwardRelayAudioSpeechDashScopeNative(
 
 	audioURL := strings.TrimSpace(gjson.GetBytes(nativeBody, "output.audio.url").String())
 	if audioURL == "" {
-		return nil, fmt.Errorf("dashscope tts response contained no audio url")
+		logger.L().Error("relay_audio.dashscope_no_audio_url",
+			zap.Int64("account_id", account.ID),
+			zap.String("upstream_model", upstreamModel))
+		return nil, dashScopeNativeClientError(c, http.StatusBadGateway, "api_error",
+			"upstream speech response contained no audio url")
 	}
 	contentType, audioBytes, err := s.downloadDashScopeAudio(upstreamCtx, c, account, audioURL)
 	if err != nil {
-		return nil, err
+		logger.L().Error("relay_audio.dashscope_audio_download_failed",
+			zap.Int64("account_id", account.ID), zap.Error(err))
+		return nil, dashScopeNativeClientError(c, http.StatusBadGateway, "api_error",
+			"failed to fetch synthesized audio")
 	}
 	c.Data(http.StatusOK, contentType, audioBytes)
 
