@@ -168,3 +168,6 @@ issues/
 
 # 本地服务器侦察工作区（含服务器地址与凭据，严禁入库）
 /_recon/
+
+!docs/requirements/
+!docs/requirements/*.md
