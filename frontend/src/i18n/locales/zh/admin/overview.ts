@@ -1154,6 +1154,15 @@ export default {
         customPlaceholder: '自定义条目，如 gpt-*-codex 或 claude-*',
         addCustom: '添加',
         emptySelectionError: '模型白名单已开启，请至少选择或添加一个模型条目',
+        auto: {
+          title: 'auto 智能路由',
+          hint: '开启后，客户端请求 auto 时由网关在「当前可调度账号能服务的已勾选模型」里自动选一个，无需把 auto 当作普通模型勾选。候选池不固定：某账号限流/掉线时自动跳过。',
+          strategy: '调度策略',
+          strategyRR: '轮询（顺序均摊）',
+          strategyRand: '随机',
+          realModelTag: '真实模型',
+          realModelTooltip: '这是上游账号真实提供的 auto 模型（非本面板的智能路由）；勾选后请求 auto 将直接转发给该模型。'
+        },
         errors: {
           empty: '请输入模型条目',
           duplicate: '该条目已存在'

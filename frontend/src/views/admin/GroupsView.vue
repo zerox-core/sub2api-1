@@ -813,6 +813,48 @@
                 </button>
               </div>
             </div>
+            <!-- auto 智能路由面板：sentinel 不再以普通条目出现在模型列表里，
+                 开启后提交时自动作为首条 sentinel 注入（如 auto::rr）。 -->
+            <div class="border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-dark-600 dark:bg-dark-800">
+              <div class="flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-200">
+                    {{ t("admin.groups.modelAllowlist.auto.title") }}
+                    <span
+                      class="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-semibold text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+                    >
+                      AUTO
+                    </span>
+                  </p>
+                  <p class="mt-0.5 text-[11px] leading-4 text-gray-500 dark:text-gray-400">
+                    {{ t("admin.groups.modelAllowlist.auto.hint") }}
+                  </p>
+                </div>
+                <Toggle
+                  :model-value="createModelAllowlistState.autoEnabled"
+                  @update:model-value="(value: boolean) => setModelAllowlistAutoEnabled(createModelAllowlistState, value)"
+                />
+              </div>
+              <div
+                v-if="createModelAllowlistState.autoEnabled"
+                class="mt-2 flex flex-wrap items-center gap-2"
+              >
+                <label class="text-[11px] text-gray-500 dark:text-gray-400">
+                  {{ t("admin.groups.modelAllowlist.auto.strategy") }}
+                </label>
+                <select
+                  :value="createModelAllowlistState.autoStrategy"
+                  class="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:border-primary-500 focus:outline-none dark:border-dark-500 dark:bg-dark-700 dark:text-gray-200"
+                  @change="setModelAllowlistAutoStrategy(createModelAllowlistState, ($event.target as HTMLSelectElement).value as 'rr' | 'rand')"
+                >
+                  <option value="rr">{{ t("admin.groups.modelAllowlist.auto.strategyRR") }}</option>
+                  <option value="rand">{{ t("admin.groups.modelAllowlist.auto.strategyRand") }}</option>
+                </select>
+                <span class="rounded bg-purple-100 px-1.5 py-0.5 font-mono text-[10px] text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+                  {{ createModelAllowlistState.autoStrategy === 'rr' ? 'auto::rr' : 'auto::rand' }}
+                </span>
+              </div>
+            </div>
             <div
               class="max-h-64 space-y-2 overflow-y-auto p-2"
             >
@@ -2453,6 +2495,47 @@
                 </button>
               </div>
             </div>
+            <!-- auto 智能路由面板（编辑）：同创建面板，sentinel 提交时注入首条。 -->
+            <div class="border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-dark-600 dark:bg-dark-800">
+              <div class="flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-200">
+                    {{ t("admin.groups.modelAllowlist.auto.title") }}
+                    <span
+                      class="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-semibold text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+                    >
+                      AUTO
+                    </span>
+                  </p>
+                  <p class="mt-0.5 text-[11px] leading-4 text-gray-500 dark:text-gray-400">
+                    {{ t("admin.groups.modelAllowlist.auto.hint") }}
+                  </p>
+                </div>
+                <Toggle
+                  :model-value="editModelAllowlistState.autoEnabled"
+                  @update:model-value="(value: boolean) => setModelAllowlistAutoEnabled(editModelAllowlistState, value)"
+                />
+              </div>
+              <div
+                v-if="editModelAllowlistState.autoEnabled"
+                class="mt-2 flex flex-wrap items-center gap-2"
+              >
+                <label class="text-[11px] text-gray-500 dark:text-gray-400">
+                  {{ t("admin.groups.modelAllowlist.auto.strategy") }}
+                </label>
+                <select
+                  :value="editModelAllowlistState.autoStrategy"
+                  class="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:border-primary-500 focus:outline-none dark:border-dark-500 dark:bg-dark-700 dark:text-gray-200"
+                  @change="setModelAllowlistAutoStrategy(editModelAllowlistState, ($event.target as HTMLSelectElement).value as 'rr' | 'rand')"
+                >
+                  <option value="rr">{{ t("admin.groups.modelAllowlist.auto.strategyRR") }}</option>
+                  <option value="rand">{{ t("admin.groups.modelAllowlist.auto.strategyRand") }}</option>
+                </select>
+                <span class="rounded bg-purple-100 px-1.5 py-0.5 font-mono text-[10px] text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+                  {{ editModelAllowlistState.autoStrategy === 'rr' ? 'auto::rr' : 'auto::rand' }}
+                </span>
+              </div>
+            </div>
             <div
               class="max-h-64 space-y-2 overflow-y-auto p-2"
             >
@@ -2488,6 +2571,13 @@
                     class="ml-1 rounded bg-primary-50 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
                   >
                     {{ t("admin.groups.modelAllowlist.wildcardTag") }}
+                  </span>
+                  <span
+                    v-if="isRealAutoModel(item.id)"
+                    class="ml-1 rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+                    :title="t('admin.groups.modelAllowlist.auto.realModelTooltip')"
+                  >
+                    {{ t("admin.groups.modelAllowlist.auto.realModelTag") }}
                   </span>
                   <span
                     v-if="allowlistSourcesLabel(item.id)"
@@ -4355,6 +4445,8 @@ import {
   invertModelAllowlistSelection,
   moveModelAllowlistItem,
   selectAllModelAllowlistItems,
+  setModelAllowlistAutoEnabled,
+  setModelAllowlistAutoStrategy,
   setModelAllowlistCandidates,
 } from "./groupModelAllowlist";
 import { createModelAllowlistCandidatesTracker } from "./modelAllowlistCandidates";
@@ -5230,6 +5322,8 @@ const resetModelAllowlistState = (
 ) => {
   const fresh = createInitialModelAllowlistState(config);
   state.enabled = fresh.enabled;
+  state.autoEnabled = fresh.autoEnabled;
+  state.autoStrategy = fresh.autoStrategy;
   state.savedModels = fresh.savedModels;
   state.items = fresh.items;
 };
@@ -5288,6 +5382,11 @@ const allowlistSourcesTitle = (modelID: string): string => {
   if (!label) return "";
   return `${t("admin.groups.modelAllowlist.sourceTooltip")}: ${label}`;
 };
+
+// isRealAutoModel：该条目是上游真实存在的 auto 模型（有来源账号声明），
+// 而非本前端注入的 auto sentinel（sentinel 已移入智能路由面板，不出现在列表）。
+const isRealAutoModel = (modelID: string): boolean =>
+  modelID.toLowerCase() === "auto" && allowlistSourcesLabel(modelID) !== "";
 
 const moveCreateModelAllowlistItem = (fromIndex: number, toIndex: number) => {
   moveModelAllowlistItem(createModelAllowlistState, fromIndex, toIndex);
