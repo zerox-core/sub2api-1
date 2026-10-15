@@ -24,10 +24,12 @@ var remoteImageHTTPClient = &http.Client{Timeout: remoteImageFetchTimeout}
 // Antigravity/Anthropic 原生直连本就只认 base64，因此该步骤只服务于
 // OpenAI 兼容入口（chat/responses）携带 http(s) 图片 URL 的场景。
 // 单张图片下载失败不阻断请求（记录后跳过，模型会看到该图缺失）。
-func ResolveRemoteImageSources(ctx context.Context, req *ClaudeRequest) {
+// 返回是否有任何 source 被改写，调用方据此决定是否需要重新序列化请求体。
+func ResolveRemoteImageSources(ctx context.Context, req *ClaudeRequest) bool {
 	if req == nil || len(req.Messages) == 0 {
-		return
+		return false
 	}
+	changedAny := false
 	for i := range req.Messages {
 		var blocks []ContentBlock
 		if err := json.Unmarshal(req.Messages[i].Content, &blocks); err != nil {
@@ -53,9 +55,11 @@ func ResolveRemoteImageSources(ctx context.Context, req *ClaudeRequest) {
 		if changed {
 			if raw, err := json.Marshal(blocks); err == nil {
 				req.Messages[i].Content = raw
+				changedAny = true
 			}
 		}
 	}
+	return changedAny
 }
 
 // fetchRemoteImageBytes 下载远程图片并返回 media type 与原始字节。
