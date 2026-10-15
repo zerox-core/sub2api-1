@@ -630,6 +630,31 @@ func (h *GroupHandler) GetGroupModelAllowlistCandidates(c *gin.Context) {
 	response.Success(c, gin.H{"models": models})
 }
 
+// GetGroupModelAllowlistSources handles getting per-model source accounts for the group model allowlist.
+// GET /api/v1/admin/groups/:id/model-allowlist-sources
+func (h *GroupHandler) GetGroupModelAllowlistSources(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
+	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || groupID < 0 {
+		response.BadRequest(c, "Invalid group ID")
+		return
+	}
+
+	result, err := h.adminService.GetGroupModelAllowlistSources(
+		c.Request.Context(),
+		groupID,
+		c.Query("platform"),
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, result)
+}
+
 // Create handles creating a new group
 // POST /api/v1/admin/groups
 func (h *GroupHandler) Create(c *gin.Context) {

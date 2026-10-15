@@ -1149,6 +1149,8 @@ export default {
         selectAll: '全选',
         invertSelection: '反选',
         wildcardTag: '通配',
+        sourceTooltip: '来源账号',
+        unmappedHint: '组内有未映射（透传）账号：{names}，可服务白名单内任意模型；auto 候选池将包含白名单全部模型。',
         customPlaceholder: '自定义条目，如 gpt-*-codex 或 claude-*',
         addCustom: '添加',
         emptySelectionError: '模型白名单已开启，请至少选择或添加一个模型条目',

@@ -119,6 +119,38 @@ export async function getModelAllowlistCandidates(
   return data.models || []
 }
 
+export interface ModelAllowlistSource {
+  id: number
+  name: string
+}
+
+export interface ModelAllowlistSources {
+  /** 模型名 → 通过 model_mapping 声明它的账号 */
+  sources: Record<string, ModelAllowlistSource[]>
+  /** 组内无映射（透传型）的可调度账号：可服务白名单内任意模型 */
+  unmapped: ModelAllowlistSource[]
+}
+
+/**
+ * Get per-model source accounts for the group model allowlist.
+ * id=0 returns empty sources (create flow has no accounts yet).
+ */
+export async function getModelAllowlistSources(
+  id: number,
+  platform?: GroupPlatform
+): Promise<ModelAllowlistSources> {
+  const { data } = await apiClient.get<ModelAllowlistSources>(
+    `/admin/groups/${id}/model-allowlist-sources`,
+    {
+      params: platform ? { platform } : undefined
+    }
+  )
+  return {
+    sources: data?.sources || {},
+    unmapped: data?.unmapped || []
+  }
+}
+
 /**
  * Create new group
  * @param groupData - Group data
@@ -478,6 +510,7 @@ export const groupsAPI = {
   getLiveCapability,
   getById,
   getModelAllowlistCandidates,
+  getModelAllowlistSources,
   create,
   duplicate,
   update,

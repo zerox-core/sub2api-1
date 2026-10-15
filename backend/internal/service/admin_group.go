@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -132,6 +133,78 @@ func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id 
 		}
 	}
 	return candidates, nil
+}
+
+// ModelAllowlistSource 模型白名单候选的来源账号。
+type ModelAllowlistSource struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+// GroupModelAllowlistSources 分组模型白名单的来源归集。
+// Sources 仅包含「通过账号 model_mapping 声明了该模型名」的账号；
+// Unmapped 是组内无映射（透传型）的可调度账号 —— 它们能服务白名单内任意模型
+// （与 AutoRouter 候选池口径一致：unrestricted 账号会把白名单整体带入候选池）。
+type GroupModelAllowlistSources struct {
+	Sources  map[string][]ModelAllowlistSource `json:"sources"`
+	Unmapped []ModelAllowlistSource            `json:"unmapped"`
+}
+
+// GetGroupModelAllowlistSources 实现 AdminService 接口。
+// platform 为空时取分组自身平台；id<=0 或无账号仓储时返回空结构（不报错）。
+func (s *adminServiceImpl) GetGroupModelAllowlistSources(ctx context.Context, id int64, platform string) (*GroupModelAllowlistSources, error) {
+	out := &GroupModelAllowlistSources{
+		Sources:  map[string][]ModelAllowlistSource{},
+		Unmapped: []ModelAllowlistSource{},
+	}
+	platform = strings.TrimSpace(platform)
+	if id > 0 {
+		group, err := s.groupRepo.GetByIDLite(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if platform == "" {
+			platform = group.Platform
+		}
+	}
+	if id <= 0 || s.accountRepo == nil {
+		return out, nil
+	}
+
+	accounts, err := s.accountRepo.ListSchedulableByGroupID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	for i := range accounts {
+		acc := &accounts[i]
+		if platform == PlatformComposite {
+			if !isConcreteRequestPlatform(acc.Platform) {
+				continue
+			}
+		} else if acc.Platform != platform {
+			continue
+		}
+		source := ModelAllowlistSource{ID: acc.ID, Name: acc.Name}
+		mapping := acc.GetModelMapping()
+		if len(mapping) == 0 {
+			out.Unmapped = append(out.Unmapped, source)
+			continue
+		}
+		for model := range mapping {
+			model = strings.TrimSpace(model)
+			if model == "" {
+				continue
+			}
+			out.Sources[model] = append(out.Sources[model], source)
+		}
+	}
+	// 账号按 ID 升序，展示顺序稳定
+	sort.Slice(out.Unmapped, func(i, j int) bool { return out.Unmapped[i].ID < out.Unmapped[j].ID })
+	for model := range out.Sources {
+		list := out.Sources[model]
+		sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
+	}
+	return out, nil
 }
 
 func (s *adminServiceImpl) ListCompositeRoutes(ctx context.Context, groupID int64) ([]CompositeModelRoute, error) {

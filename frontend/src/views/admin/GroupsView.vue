@@ -2465,6 +2465,12 @@
               >
                 {{ t("admin.groups.modelAllowlist.empty") }}
               </p>
+              <p
+                v-else-if="editModelAllowlistSources.unmapped.length > 0"
+                class="rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-400"
+              >
+                {{ t("admin.groups.modelAllowlist.unmappedHint", { names: editModelAllowlistSources.unmapped.map((a) => `${a.name}#${a.id}`).join("、") }) }}
+              </p>
               <div
                 v-for="(item, index) in editModelAllowlistState.items"
                 :key="item.id"
@@ -2482,6 +2488,13 @@
                     class="ml-1 rounded bg-primary-50 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
                   >
                     {{ t("admin.groups.modelAllowlist.wildcardTag") }}
+                  </span>
+                  <span
+                    v-if="allowlistSourcesLabel(item.id)"
+                    class="ml-1 whitespace-nowrap rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-dark-700 dark:text-gray-400"
+                    :title="allowlistSourcesTitle(item.id)"
+                  >
+                    {{ allowlistSourcesLabel(item.id) }}
                   </span>
                 </span>
                 <button
@@ -4271,6 +4284,7 @@ import { useAppStore } from "@/stores/app";
 import { useAuthStore } from "@/stores/auth";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
+import type { ModelAllowlistSources } from "@/api/admin/groups";
 import type {
   AdminGroup,
   CodexModelsManifestConfig,
@@ -4903,6 +4917,7 @@ const createCodexManifestDefaults = (): CodexModelsManifestConfig => ({
 const editCodexManifestConfig = ref<CodexModelsManifestConfig>(createCodexManifestDefaults());
 const editCodexManifestAccountNames = ref<Record<number, string>>({});
 const modelAllowlistCandidatesTracker = createModelAllowlistCandidatesTracker();
+const editModelAllowlistSources = ref<ModelAllowlistSources>({ sources: {}, unmapped: [] });
 const createModelAllowlistSelectedCount = computed(
   () => createModelAllowlistState.items.filter((item) => item.selected).length,
 );
@@ -5236,6 +5251,17 @@ const loadModelAllowlistCandidates = async (
       return;
     }
     setModelAllowlistCandidates(state, models);
+    // 来源账号仅编辑模式可查（新建分组还没有账号）；失败静默，不影响白名单本身
+    if (mode === "edit" && groupID > 0) {
+      try {
+        editModelAllowlistSources.value = await adminAPI.groups.getModelAllowlistSources(groupID, platform);
+      } catch (error) {
+        console.error("Error loading model allowlist sources:", error);
+        editModelAllowlistSources.value = { sources: {}, unmapped: [] };
+      }
+    } else {
+      editModelAllowlistSources.value = { sources: {}, unmapped: [] };
+    }
   } catch (error) {
     if (!modelAllowlistCandidatesTracker.isCurrent(requestID, request)) {
       return;
@@ -5246,6 +5272,21 @@ const loadModelAllowlistCandidates = async (
       loadingRef.value = false;
     }
   }
+};
+
+// 模型白名单条目的来源账号标签（编辑模式；大小写不敏感匹配）
+const allowlistSourcesLabel = (modelID: string): string => {
+  const entry = Object.entries(editModelAllowlistSources.value.sources).find(
+    ([model]) => model.toLowerCase() === modelID.toLowerCase()
+  );
+  if (!entry || entry[1].length === 0) return "";
+  return entry[1].map(account => `${account.name}#${account.id}`).join("、");
+};
+
+const allowlistSourcesTitle = (modelID: string): string => {
+  const label = allowlistSourcesLabel(modelID);
+  if (!label) return "";
+  return `${t("admin.groups.modelAllowlist.sourceTooltip")}: ${label}`;
 };
 
 const moveCreateModelAllowlistItem = (fromIndex: number, toIndex: number) => {

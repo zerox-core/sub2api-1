@@ -40,6 +40,9 @@ type AdminService interface {
 	GetAllGroupsIncludingInactive(ctx context.Context) ([]Group, error)
 	GetGroup(ctx context.Context, id int64) (*Group, error)
 	GetGroupModelsListCandidates(ctx context.Context, id int64, platform string) ([]string, error)
+	// GetGroupModelAllowlistSources 返回分组内各候选模型的来源账号
+	// （按组内可调度账号 model_mapping 的客户端模型名归集）与无映射（透传）账号。
+	GetGroupModelAllowlistSources(ctx context.Context, id int64, platform string) (*GroupModelAllowlistSources, error)
 	CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error)
 	// DuplicateGroup creates an inactive independent copy of a group's configuration
 	// and account bindings while preserving each binding's priority.

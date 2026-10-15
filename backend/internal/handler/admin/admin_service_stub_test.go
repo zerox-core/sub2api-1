@@ -302,6 +302,13 @@ func (s *stubAdminService) GetGroupModelsListCandidates(ctx context.Context, id 
 	return []string{"claude-sonnet-4-6"}, nil
 }
 
+func (s *stubAdminService) GetGroupModelAllowlistSources(ctx context.Context, id int64, platform string) (*service.GroupModelAllowlistSources, error) {
+	return &service.GroupModelAllowlistSources{
+		Sources:  map[string][]service.ModelAllowlistSource{},
+		Unmapped: []service.ModelAllowlistSource{},
+	}, nil
+}
+
 func (s *stubAdminService) ListCompositeRoutes(ctx context.Context, groupID int64) ([]service.CompositeModelRoute, error) {
 	s.advancedGroupOperationCalls++
 	return []service.CompositeModelRoute{

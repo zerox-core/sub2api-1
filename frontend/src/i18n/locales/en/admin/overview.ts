@@ -1152,6 +1152,8 @@ export default {
         selectAll: 'Select all',
         invertSelection: 'Invert',
         wildcardTag: 'wildcard',
+        sourceTooltip: 'Source accounts',
+        unmappedHint: 'Unmapped (passthrough) accounts in this group: {names}. They can serve any allowlisted model; the auto candidate pool will include every allowlisted model.',
         customPlaceholder: 'Custom entry, e.g. gpt-*-codex or claude-*',
         addCustom: 'Add',
         emptySelectionError: 'The model allowlist is enabled; select or add at least one model entry',
