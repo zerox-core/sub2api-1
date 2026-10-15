@@ -1799,9 +1799,12 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	if err := validateOpenAIImagesModel(requestModel); err != nil {
 		return nil, err
 	}
-	upstreamModel := account.GetMappedModel(requestModel)
-	if err := validateOpenAIImagesModel(upstreamModel); err != nil {
-		return nil, err
+	upstreamModel, mapped := account.ResolveMappedModel(requestModel)
+	// 命中账号级映射则信任管理员配置的任意上游模型；未命中才收紧校验。
+	if !mapped {
+		if err := validateOpenAIImagesModel(upstreamModel); err != nil {
+			return nil, err
+		}
 	}
 	direct := usesCodexDirectImages(upstreamModel) && !isOpenAIImagesForceResponses(ctx)
 	beginUpstreamResponseModelObservation(c)

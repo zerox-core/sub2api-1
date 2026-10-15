@@ -211,6 +211,8 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 	if json.Unmarshal(request.claudeBody, &claudeRequest) != nil {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", "Invalid request body")
 	}
+	// Antigravity 上游只认 base64 内联图片：OpenAI 兼容入口携带 http(s) 直链时先下载转 base64。
+	antigravity.ResolveRemoteImageSources(ctx, &claudeRequest)
 
 	mappedModel := s.getMappedModelForThinkingLevel(
 		account,

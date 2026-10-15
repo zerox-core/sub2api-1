@@ -633,10 +633,15 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	if err := validateCompatibleImagesModel(requestModel); err != nil {
 		return nil, err
 	}
-	upstreamModel := account.GetMappedModel(requestModel)
-	if err := validateCompatibleImagesModel(upstreamModel); err != nil {
-		return nil, err
+	upstreamModel, mapped := account.ResolveMappedModel(requestModel)
+	if !mapped {
+		// 未命中账号级映射时保持既有防线：只放行已知图片模型家族。
+		if err := validateCompatibleImagesModel(upstreamModel); err != nil {
+			return nil, err
+		}
 	}
+	// 命中映射则信任管理员配置的任意上游模型（如 doubao-seedream-*），
+	// 其请求模型合法性已由上面的 requestModel 校验保证。
 	SetOpsUpstreamModel(c, upstreamModel)
 	logger.LegacyPrintf(
 		"service.openai_gateway",
