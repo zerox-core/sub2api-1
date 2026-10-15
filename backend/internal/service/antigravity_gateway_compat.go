@@ -212,7 +212,12 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", "Invalid request body")
 	}
 	// Antigravity 上游只认 base64 内联图片：OpenAI 兼容入口携带 http(s) 直链时先下载转 base64。
-	antigravity.ResolveRemoteImageSources(ctx, &claudeRequest)
+	// gemini 模型的 geminiBody 从原始 claudeBody 字节转换而来，这里必须回写才能生效。
+	if antigravity.ResolveRemoteImageSources(ctx, &claudeRequest) {
+		if refreshed, err := json.Marshal(claudeRequest); err == nil {
+			request.claudeBody = refreshed
+		}
+	}
 
 	mappedModel := s.getMappedModelForThinkingLevel(
 		account,
