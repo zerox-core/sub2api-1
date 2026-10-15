@@ -181,7 +181,7 @@
 | --- | --- | --- |
 | D1 | 分组 14 的语音模型 | **连语音一起移除**（含 `-realtime`、`livetranslate`、`s2s`、`audio-*` 实时类，以及 TTS/ASR） |
 | D2 | 生图收费口径 | **继续用倍率**（公开组 1.2×、自用 1.0×），不引入 `image_price_*` 固定单价 |
-| D3 | 国模"打开思考"语义 | **两者都要**：允许客户端 `reasoning_effort` 切换，且默认给思考型号带上 thinking 参数 |
+| D3 | 国模"打开思考"语义 | **只走挡位切换**：端侧自带思考挡位选择，网关透传/记录并按挡位计费，**不**主动注入 thinking 参数（2026-10-15 用户确认；实测已可用） |
 | D4 | 账号层真实支持性过滤 | **被动学习**：某模型 404/403/无权限时自动拉黑（管理端可见、可清理） |
 
 ### 仍需确认
@@ -233,3 +233,48 @@
 - 备份：`docs/ops/backup-groups-5-14-20261015.json`（变更前两组的完整配置，含 `model_allowlist`、
   `allow_image_generation`、`model_routing`）。
 - 回滚：按备份中的原值 `PUT /api/v1/admin/groups/{5,14}` 即可。
+
+### 2026-10-15 P1：羊毛生图组 / 羊毛语音组建立与接入
+
+按用户要求以"建组"方式落地：
+
+| 对象 | 变更 |
+| --- | --- |
+| 新建分组 **24「羊毛组生图」** | openai、`is_exclusive=true`、`rate_multiplier=1.0`、`allow_image_generation=true`、白名单 **12 个免费生图模型** |
+| 新建分组 **25「羊毛语音组」** | openai、`is_exclusive=true`、`rate_multiplier=1.0`、白名单 **23 个语音模型**（TTS/ASR/实时语音/实时翻译） |
+| 分组 5 国模 | 白名单 4 → **16**，`allow_image_generation=true`，`model_routing` = `{"qwen-image-*":[43],"wan2.7-image*":[43],"z-image-turbo":[43]}`（enabled） |
+| 分组 14 羊毛 | 白名单 154 → **166**，同上 |
+| 分组 15 大羊毛 | 白名单 17 → **25**，同上 |
+| 账号 43 百炼 | 绑定分组 [14, 15, 24, 25] |
+| 用户 1 | `user_allowed_groups` 授权 24、25 |
+
+**12 个生图模型与 23 个语音模型全部由账号 43「百炼(阿里云)」独家声明。**
+
+#### ⚠️ 阻断发现：分组 24/25 目前没有可用调用通道
+
+实测（直连百炼，绕过网关）：
+
+| 端点 | 结果 |
+| --- | --- |
+| `POST /compatible-mode/v1/images/generations`（qwen-image-2.0 / z-image-turbo） | **404**，兼容模式不提供该端点 |
+| `POST /compatible-mode/v1/audio/speech`、`/audio/transcriptions` | **404** |
+| `POST /api/v1/services/aigc/multimodal-generation/generation`（qwen-image-2.0 / qwen-image-3.0） | **200**，返回图片 URL |
+| 同上（qwen3-tts-flash） | **200**，返回音频 URL |
+
+而 sub2api 网关侧的入站校验只认 `gpt-image-*` / `grok-imagine*` / `gemini-*-image`
+（`service/openai_images.go:478-503`），转发也只走上游 OpenAI 兼容路径，**不支持百炼原生
+`multimodal-generation` 协议**。因此分组 24/25 建好但暂时无法被调用。
+
+→ 这也是"账号扫出一堆用不了的模型"的根因之一：百炼 `/v1/models` 列出 177 个模型，
+其中生图/语音类**不在兼容端点提供**，光看模型清单无法分辨 → 强化了 R5（账号层真实支持性）
+与 R6（按模态过滤）的必要性。
+
+#### ✅ R4 验证通过：国模思考挡位切换可用
+
+分组 5 用 key 12 发 `POST /v1/chat/completions`，`model=glm-5.3-flash` +
+`reasoning_effort=high` → HTTP 200，上游返回 `reasoning_content`，
+`usage_logs` 记录 `reasoning_effort=high` / `requested_reasoning_effort=high`；
+不带 effort 的对照请求记录为 `-`。**无需改代码**。
+
+- 备份：`docs/ops/backup-groups-5-14-15-before-image-relink.json`
+- 备注：分组 5 当前唯一可调度账号是 41「WorkBuddy直连」（账号 42 火山仍在 403 冷却）。
