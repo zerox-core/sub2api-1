@@ -2596,6 +2596,40 @@ func (h *AccountHandler) ClearRateLimit(c *gin.Context) {
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
+// ClearUnsupportedModels 清空账号级「上游明确不支持」模型清单（R5）。
+//
+// 用途：渠道补上了模型、或换了上游之后，管理员手动放行该账号被拉黑的模型，
+// 让它重新参与调度（清单存在 accounts.extra.unsupported_models，账号详情里可见）。
+//
+// DELETE /api/v1/admin/accounts/:id/unsupported-models
+func (h *AccountHandler) ClearUnsupportedModels(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	if err := h.adminService.UpdateAccountExtra(c.Request.Context(), accountID, service.UnsupportedModelExtraUpdate(nil)); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	// 同步进程内副本，使本次响应立刻反映清空结果。
+	if account != nil {
+		if account.Extra == nil {
+			account.Extra = make(map[string]any, 1)
+		}
+		account.Extra[service.UnsupportedModelsExtraKey] = nil
+	}
+
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
 // ResetQuota handles resetting account quota usage
 // POST /api/v1/admin/accounts/:id/reset-quota
 func (h *AccountHandler) ResetQuota(c *gin.Context) {

@@ -494,3 +494,55 @@ mappedModel := s.getMappedModelForThinkingLevel(
 供分组层"一键按模态过滤"使用；`ModelCapabilityCatalog` 支持用
 `accounts.extra.upstream_model_metadata` 覆盖内置判断。
 6 个单测覆盖模态判定、挡位还原、过滤器与元数据合并优先级。
+
+### 2026-10-15 P5：R5 账号层真实支持性过滤（被动学习）
+
+用户决策 **D4 = 被动学习**：上游明确拒绝的模型自动记账，管理端可见、可清。
+
+#### 为什么需要持久记账
+
+已有 `RateLimitService.HandleUpstreamModelNotFound` 只做 **30 分钟临时冷却**
+（per-(账号,模型) rate limit）：冷却到期或进程重启后同一个账号又会被选中，
+而管理端也看不到"哪个账号到底吃不下哪些模型"。
+
+#### 实现
+
+1. **数据**（`account_unsupported_models.go`）：
+   `accounts.extra.unsupported_models` =
+   `{"<模型名>": {status, reason, count, first_seen, last_seen}}`，
+   模型名归一化（小写、去 `models/` 前缀、去首尾空白）。
+   - **阈值 2 次**才生效：避免一次偶发 404 就永久拉黑；
+   - **TTL 7 天**内未再命中自动失效：给上游修复留恢复窗口；
+   - 写入时顺带清理失效记录，避免 extra 无限增长。
+2. **判定**：`Account.IsModelMarkedUnsupported`，在 `IsModelSupported` 的**最前面**判定
+   —— 必须在透传短路之前，因为透传账号同样会遇到"上游根本没有这个模型"，
+   而那正是 per-(账号,模型) 404 冷却被反复触发的来源。
+   无该键时走零分配快速路径（`IsModelSupported` 在调度热路径上）。
+3. **写入**：复用既有 `HandleUpstreamModelNotFound` 触发点，在设冷却的同时调用
+   `persistUnsupportedModel` 落库，并同步进程内 extra 副本使本次判定立刻生效。
+   `shouldSkipCodexPlanGatedImageModelCooldown` 的"端点错配"分支**不记账**，
+   —— 那是用错端点，不是账号能力缺失。
+4. **管理端**：账号响应本就返回 `extra`，清单直接可见；
+   新增 `DELETE /api/v1/admin/accounts/:id/unsupported-models` 清空并放行。
+
+#### ✅ 验证（镜像 `sub2api-ag-quota:r5-20261015`）
+
+受控构造真实 404：账号 5（zyuou）的 mapping 含 `gpt-image-1`，而上游对它的
+`/v1/images/generations` 稳定返回 404 model_not_found。临时把该模型加进分组 23 白名单后：
+
+| 步骤 | 结果 |
+| --- | --- |
+| 第 1 次请求 | HTTP 502（上游失败且无备用账号），**`accounts.extra` 出现记录** |
+| 记录内容 | `{"gpt-image-1": {"count": 1, "status": 404, "reason": "upstream_404_model_not_found", ...}}` |
+| 第 2 / 3 次请求 | HTTP 503 `No available compatible accounts`（账号 5 已被排除） |
+| 清理 | 白名单与 extra 记录均恢复（`group23_has_gpt_image_1=false`、`account5_extra=<cleared>`） |
+
+> 说明：第 1 次 404 后 per-(账号,模型) 30 分钟冷却立即生效，第 2 次请求没再打到上游，
+> 因此 `count` 停在 1（未达阈值）。端到端验证覆盖的是「404 → 记账 → 账号被排除 → 清理」；
+> 「达阈值后由 `IsModelSupported` 持久排除（不依赖冷却）」由单测覆盖：
+> `TestIsModelSupportedExcludesUpstreamRejectedModel`、
+> `TestPersistUnsupportedModelWritesAccountExtra`、`TestUnsupportedModelRecordExpiresAfterTTL` 等 8 个用例。
+
+#### 遗留
+
+管理端 UI 尚未渲染该清单（数据已随账号详情返回，清除端点已就绪）。
