@@ -47,6 +47,8 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	if strings.TrimSpace(claudeReq.Model) == "" {
 		return nil, s.writeClaudeError(c, http.StatusBadRequest, "invalid_request_error", "Missing model")
 	}
+	// Antigravity 上游只认 base64 内联图片：客户端传 http(s) 直链时先下载转 base64。
+	antigravity.ResolveRemoteImageSources(ctx, &claudeReq)
 
 	originalModel := claudeReq.Model
 	mappedModel := s.getMappedModelForThinkingLevel(

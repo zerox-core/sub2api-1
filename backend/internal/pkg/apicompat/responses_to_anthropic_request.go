@@ -333,6 +333,9 @@ func responsesFunctionOutputToAnthropicContent(item ResponsesInputItem) json.Raw
 			case "input_image":
 				if source := dataURIToAnthropicImageSource(part.ImageURL); source != nil {
 					blocks = append(blocks, AnthropicContentBlock{Type: "image", Source: source})
+				} else if source := urlToAnthropicImageSource(part.ImageURL); source != nil {
+					// 保留 http(s) 直链，由平台适配层（如 antigravity）决定是否下载内联。
+					blocks = append(blocks, AnthropicContentBlock{Type: "image", Source: source})
 				}
 			}
 		}
@@ -548,6 +551,9 @@ func convertResponsesUserToAnthropicContent(raw json.RawMessage) (json.RawMessag
 			}
 		case "input_image":
 			src := dataURIToAnthropicImageSource(p.ImageURL)
+			if src == nil {
+				src = urlToAnthropicImageSource(p.ImageURL)
+			}
 			if src != nil {
 				blocks = append(blocks, AnthropicContentBlock{
 					Type:   "image",
@@ -646,6 +652,21 @@ func dataURIToAnthropicImageSource(dataURI string) *AnthropicImageSource {
 		Type:      "base64",
 		MediaType: mediaType,
 		Data:      data,
+	}
+}
+
+// urlToAnthropicImageSource wraps an http(s) image URL as a "url" source so
+// downstream platform adapters can inline it. Returns nil for anything that is
+// not a plain http/https URL (data URIs are handled by dataURIToAnthropicImageSource).
+func urlToAnthropicImageSource(imageURL string) *AnthropicImageSource {
+	trimmed := strings.TrimSpace(imageURL)
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		return nil
+	}
+	return &AnthropicImageSource{
+		Type: "url",
+		URL:  trimmed,
 	}
 }
 
