@@ -108,6 +108,45 @@ func geminiThinkingLevelFromClaudeThinking(thinking *antigravity.ThinkingConfig)
 	}
 }
 
+// geminiThinkingLevelFromReasoningEffort 把 OpenAI 风格的 reasoning_effort 映射到
+// Antigravity 上游的思考挡位（上游只有 low/medium/high 三个变体）：
+//   - none/minimal/low → low（上游没有"不思考"变体，取最浅一档）
+//   - medium → medium
+//   - high/xhigh/max → high（Gemini 没有更高档位，按最高档处理）
+//
+// 返回空串表示客户端没有给出可用挡位，调用方应回退到其它信号。
+func geminiThinkingLevelFromReasoningEffort(effort string) string {
+	switch NormalizeMaxReasoningEffort(effort) {
+	case "minimal", "low":
+		return "low"
+	case "medium":
+		return "medium"
+	case "high", "xhigh", "max":
+		return "high"
+	}
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "none", "disabled", "off":
+		return "low"
+	}
+	return ""
+}
+
+// geminiThinkingLevelFromAntigravityCompat 决定兼容入口（Chat Completions / Responses）
+// 该用哪个思考挡位：客户端显式的 reasoning_effort 优先，其次才是请求体里的 Claude
+// thinking 配置。
+//
+// 此前只读后者，于是 OpenAI 风格客户端传 reasoning_effort=low 时，
+// 挡位虽然被记录进 usage_log，上游却仍按默认的 high 变体运行——
+// 这正是"挡位开关不起作用、只能靠换模型 id 表达思考强度"的根因。
+func geminiThinkingLevelFromAntigravityCompat(effort *string, thinking *antigravity.ThinkingConfig) string {
+	if effort != nil {
+		if level := geminiThinkingLevelFromReasoningEffort(*effort); level != "" {
+			return level
+		}
+	}
+	return geminiThinkingLevelFromClaudeThinking(thinking)
+}
+
 // accountRawModelMappingHasKey 判断 key 是否由用户写在账号 credentials.model_mapping 里
 // （而不是 resolveModelMapping 运行时补进来的默认透传条目）。
 func accountRawModelMappingHasKey(account *Account, key string) bool {
@@ -155,6 +194,10 @@ func resolveGeminiThinkingVariantForLevel(account *Account, requestedModel strin
 	if preferred == "" {
 		preferred = "high"
 	}
+	// 兜底顺序保持 [preferred, high, medium, low, tiered]：挡位变体缺失时宁可升档
+	// 成功，也不让请求因没有变体而失败（既有测试锁定该语义）。代价是请求 low 而
+	// low 变体缺失时会落到 high 并按 high 计费 —— 已知取舍，若要改为"绝不升档"
+	// 需同时决定失败时客户端看到什么（404 还是降级提示）。
 	order := []string{preferred}
 	for _, level := range []string{"high", "medium", "low", "tiered"} {
 		if level != preferred {

@@ -28,6 +28,10 @@ const (
 var openAIReasoningEffortValues = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
 var anthropicReasoningEffortValues = []string{"low", "medium", "high", "xhigh", "max"}
 
+// Antigravity（Gemini）上游用 gemini-3.x-flash-{low,medium,high} 这类后缀变体表达
+// 思考挡位：没有比 high 更高的档，也不存在"无思考"档，因此分组级策略只开放这三档。
+var antigravityReasoningEffortValues = []string{"low", "medium", "high"}
+
 func normalizeReasoningEffortMappingSource(raw string) string {
 	if strings.EqualFold(strings.TrimSpace(raw), "none") {
 		return "none"
@@ -142,6 +146,8 @@ func reasoningEffortValuesForPlatform(platform string) []string {
 		return openAIReasoningEffortValues
 	case PlatformAnthropic:
 		return anthropicReasoningEffortValues
+	case PlatformAntigravity:
+		return antigravityReasoningEffortValues
 	default:
 		return nil
 	}
@@ -155,10 +161,11 @@ func normalizeMaxReasoningEffortForPlatform(platform, raw string) (string, error
 	allowedValues := reasoningEffortValuesForPlatform(platform)
 	if len(allowedValues) == 0 {
 		return "", fmt.Errorf(
-			"reasoning effort policy is only supported for platforms %q, %q, and %q",
+			"reasoning effort policy is only supported for platforms %q, %q, %q, and %q",
 			PlatformAnthropic,
 			PlatformOpenAI,
 			PlatformComposite,
+			PlatformAntigravity,
 		)
 	}
 

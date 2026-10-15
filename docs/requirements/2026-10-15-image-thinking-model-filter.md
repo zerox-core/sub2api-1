@@ -318,7 +318,8 @@
 
 1. `relay_audio_dashscope.go` 目前把音频 URL 全量读入内存后写回；
    若后续出现大音频，需要改为流式透传（`writeGrokMediaContentResponse` 已具备该形态）。
-2. R1 / R3 / R5 / R6 / R7 仍未实现。
+2. R1 / R3 / R5 / R6 / R7 仍未实现（后续进展见 P4：R3 已完成、R6 落地雏形、
+   R1 配置到位但卡在上游渠道）。
 
 ### 2026-10-15 P3：mp3 输出 + 分组 5 生图打通（用户决策后）
 
@@ -383,3 +384,101 @@ usage 记 `group_id=5, account_id=43, image_count=1`。
 按用户决策保持现有配置：三组各 12 个生图模型 + `model_routing`
 `{"qwen-image-*":[43],"wan2.7-image*":[43],"z-image-turbo":[43]}`（enabled），
 账号 43 绑定 5/14/15/24/25 —— 五个组现在都能生图。
+
+### 2026-10-15 P4：Gemini 思考挡位打通（R3）+ R1 收口 + 能力目录雏形
+
+用户话术：「继续收尾后进行 gemini 的」。
+
+#### ① R3 根因：挡位参数被记录了，却没影响路由
+
+线上实测（修复前，key 54 → 分组 12，账号 34）：
+
+```
+22:20:27 | effort=NULL | upstream=gemini-3.8-flash-high
+22:20:30 | effort=low  | upstream=gemini-3.8-flash-high   ← 应为 -low
+22:20:32 | effort=high | upstream=gemini-3.8-flash-high
+```
+
+`usage_logs.requested_reasoning_effort` 如实记下了客户端意图，但上游始终跑
+`gemini-3.8-flash-high`。根因在 `antigravity_gateway_compat.go`：
+
+```go
+mappedModel := s.getMappedModelForThinkingLevel(
+    account,
+    request.originalModel,
+    geminiThinkingLevelFromClaudeThinking(claudeRequest.Thinking), // ← 只读 Claude thinking
+)
+```
+
+挡位推导只看转换后的 `claudeRequest.Thinking`，而 OpenAI 风格客户端发的是
+`reasoning_effort` —— 该字段其实早就被提取进 `antigravityCompatRequest.reasoningEffort`
+（`extractCCReasoningEffortFromBody` / `ExtractResponsesReasoningEffortFromBody`），
+只是**没有任何调用点读它**。于是所有挡位请求都落到默认 high。
+这正是用户描述的「不能开思考能力的挡位，只能按思考能力换不同 id 调用」。
+
+#### ② 修复
+
+1. 新增 `geminiThinkingLevelFromReasoningEffort`：
+   `none/minimal/low → low`、`medium → medium`、`high/xhigh/max → high`
+   （Gemini 上游只有三档，没有"不思考"变体，故 none 取最浅一档；也没有比 high 更高的档）。
+2. 新增 `geminiThinkingLevelFromAntigravityCompat`：**客户端显式 effort 优先**，
+   未给时才回退到 Claude thinking 配置（保持原有 Claude 客户端行为不变）。
+3. `prepareAntigravityCompatCall` 改用后者。
+4. 分组级挡位策略放开 antigravity 平台：`reasoningEffortValuesForPlatform` 增加
+   `PlatformAntigravity`，值域 `low/medium/high`（`antigravityReasoningEffortValues`），
+   错误提示同步更新；前端 `groupsReasoningEffort.ts` 的
+   `supportsReasoningEffortPolicyPlatform` / 值域 / 来源值域（antigravity 不提供 none）同步放开。
+
+#### ✅ 验证（镜像 `sub2api-ag-quota:gemini-dial-20261015`）
+
+| 客户端 `reasoning_effort` | 上游模型 | 结果 |
+| --- | --- | --- |
+| 未指定 | `gemini-3.8-flash-high` | 200 |
+| `low` | **`gemini-3.8-flash-low`** | 200 |
+| `medium` | **`gemini-3.8-flash-medium`** | 200 |
+| `high` | `gemini-3.8-flash-high` | 200 |
+| `minimal` | `gemini-3.8-flash-low` | 200 |
+| `max` | `gemini-3.8-flash-high` | 200 |
+
+6/6 HTTP 200，账号 34，`usage_logs` 的 `upstream_model` 与
+`requested_reasoning_effort` 一一对应。
+
+#### ③ 已知取舍：挡位变体缺失时仍会升档
+
+`resolveGeminiThinkingVariantForLevel` 的兜底顺序 `[preferred, high, medium, low, tiered]`
+会在请求 low 而 low 变体不存在时落到 high（按 high 计费）。
+曾改为"只向下降档"，但既有测试
+`TestResolveGeminiThinkingVariant/only_-high_exists:_low_request_degrades_to_high`
+明确锁定了"宁可升档也不让请求失败"的语义，故**回退该行为变更**，并在代码注释中记录取舍；
+若要改成绝不升档，需同时决定失败时客户端看到什么（404 还是降级提示）。
+
+#### ④ R1 收口：配置已到位，卡点在上游渠道
+
+分组 12（公开）白名单已补齐生图模型并清 `apikey:auth:*` 缓存，但请求仍 400。
+**直连探测账号 5（zyuou）**结论：
+
+| 请求 | 结果 |
+| --- | --- |
+| `{model,prompt,n}`（最小体） | **424** `image_generation_capacity_limited`（上游生图即时额度不可用） |
+| `+ size` | 400 `The image request is invalid` |
+| `+ response_format` | 400 同上 |
+| `gpt-image-2.5` | 502 `Upstream service temporarily unavailable` |
+| `gpt-image-1` | 404（zyuou 无此模型） |
+| `GET /models` | 200，含 `gpt-image-2` / `2.5` / `2.5-flare` / `2.5-sunburst` |
+
+同一个最小请求两次分别得到 424 与 400，说明 **zyuou 上游自身不稳定**：
+生图额度不可用 + 参数校验前后不一致。这是**渠道侧问题**，网关配置无误
+（分组 23 自用走丽珠账号 40 生图 200 正常）。
+
+待用户决策：公开组（12）是否改用/追加可用的生图账号，还是维持现状等 zyuou 恢复。
+
+#### ⑤ R6 能力目录雏形（`model_capability.go`）
+
+为后续「账号层真实支持性过滤 / 分组层功能性过滤」打底，先落地纯函数分类器：
+模型名 → 模态（text/vision/image/audio/video/embedding）+ 是否思考 + 挡位，
+并把 `gemini-3.8-flash-high` 这类**挡位变体还原为 base + level**
+（`BaseModel` / `ThinkingLevel`），使 UI 能把同一模型的挡位变体折叠展示。
+另附 `ModelCapabilityFilter`（按模态过滤白名单、可排除挡位变体），
+供分组层"一键按模态过滤"使用；`ModelCapabilityCatalog` 支持用
+`accounts.extra.upstream_model_metadata` 覆盖内置判断。
+6 个单测覆盖模态判定、挡位还原、过滤器与元数据合并优先级。

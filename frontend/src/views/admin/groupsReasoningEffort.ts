@@ -25,6 +25,14 @@ const anthropicReasoningEffortValues = [
   "max",
 ] as const;
 
+// Antigravity（Gemini 走 OAuth 上游）用 gemini-3.x-flash-{low,medium,high}
+// 后缀变体表达思考挡位：没有比 high 更高的档，也没有"不思考"档。
+const antigravityReasoningEffortValues = [
+  "low",
+  "medium",
+  "high",
+] as const;
+
 const reasoningEffortMatchTypes: readonly ReasoningEffortMatchType[] = [
   "exact",
   "prefix",
@@ -37,17 +45,23 @@ export const reasoningEffortMappingDeny = "deny";
 
 const reasoningEffortValuesForPlatform = (
   platform: GroupPlatform,
-): readonly string[] =>
-  platform === "anthropic"
-    ? anthropicReasoningEffortValues
-    : supportsReasoningEffortPolicyPlatform(platform)
-      ? openAIReasoningEffortValues
-      : [];
+): readonly string[] => {
+  if (platform === "anthropic") return anthropicReasoningEffortValues;
+  if (platform === "antigravity") return antigravityReasoningEffortValues;
+  return supportsReasoningEffortPolicyPlatform(platform)
+    ? openAIReasoningEffortValues
+    : [];
+};
 
 export function supportsReasoningEffortPolicyPlatform(
   platform: GroupPlatform,
 ): boolean {
-  return platform === "anthropic" || platform === "openai" || platform === "composite";
+  return (
+    platform === "anthropic" ||
+    platform === "openai" ||
+    platform === "composite" ||
+    platform === "antigravity"
+  );
 }
 
 export function reasoningEffortOptionsForPlatform(platform: GroupPlatform) {
@@ -60,10 +74,14 @@ export function reasoningEffortOptionsForPlatform(platform: GroupPlatform) {
 export function reasoningEffortSourceOptionsForPlatform(
   platform: GroupPlatform,
 ) {
-  return (supportsReasoningEffortPolicyPlatform(platform)
-    ? openAIReasoningEffortSourceValues
-    : []
-  ).map((value) => ({ value, label: value }));
+  // Antigravity 没有"不思考"档，来源值域与目标值域一致（不含 none）。
+  const values =
+    platform === "antigravity"
+      ? antigravityReasoningEffortValues
+      : supportsReasoningEffortPolicyPlatform(platform)
+        ? openAIReasoningEffortSourceValues
+        : [];
+  return values.map((value) => ({ value, label: value }));
 }
 
 export function reasoningEffortTargetOptionsForPlatform(
@@ -94,7 +112,8 @@ export function normalizeReasoningEffortSourceForPlatform(
   value: string | null | undefined,
 ): string {
   const normalized = value?.trim().toLowerCase() ?? "";
-  return supportsReasoningEffortPolicyPlatform(platform) &&
+  return platform !== "antigravity" &&
+    supportsReasoningEffortPolicyPlatform(platform) &&
     normalized === "none"
     ? "none"
     : normalizeReasoningEffortForPlatform(platform, value);
