@@ -1,0 +1,137 @@
+diff --git a/frontend/src/views/admin/GroupsView.vue b/frontend/src/views/admin/GroupsView.vue
+index 460ede86f..40bc9a001 100644
+--- a/frontend/src/views/admin/GroupsView.vue
++++ b/frontend/src/views/admin/GroupsView.vue
+@@ -162,7 +162,7 @@
+               ]"
+             >
+               <PlatformIcon :platform="value" size="xs" />
+-              {{ t("admin.groups.platforms." + value, platformLabel(value)) }}
++              {{ t("admin.groups.platforms." + value) }}
+             </span>
+           </template>
+ 
+@@ -442,6 +442,16 @@
+                   t("admin.groups.rpmOverrides")
+                 }}</span>
+               </button>
++              <button
++                v-if="!authStore.isSimpleMode"
++                data-testid="group-view-models"
++                title="查看该分组上游可用模型，点击复制模型 ID"
++                @click="handleViewModels(row)"
++                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-green-600 dark:hover:bg-dark-700 dark:hover:text-green-400"
++              >
++                <Icon name="document" size="sm" />
++                <span class="text-xs">模型</span>
++              </button>
+               <button
+                 @click="handleDelete(row)"
+                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+@@ -3953,7 +3963,7 @@
+                                     : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+                   ]"
+                 >
+-                  {{ t("admin.groups.platforms." + group.platform, platformLabel(group.platform)) }}
++                  {{ t("admin.groups.platforms." + group.platform) }}
+                 </span>
+               </div>
+             </div>
+@@ -4376,6 +4386,13 @@
+       @close="showRPMOverridesModal = false"
+       @success="loadGroups"
+     />
++
++    <!-- Group Models Modal -->
++    <GroupModelsModal
++      :show="showModelsModal"
++      :group="modelsModalGroup"
++      @close="showModelsModal = false"
++    />
+   </AppLayout>
+ </template>
+ 
+@@ -4413,10 +4430,10 @@ import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
+ import EmptyState from "@/components/common/EmptyState.vue";
+ import Select from "@/components/common/Select.vue";
+ import PlatformIcon from "@/components/common/PlatformIcon.vue";
+-import { platformLabel } from "@/utils/platformColors";
+ import Icon from "@/components/icons/Icon.vue";
+ import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipliersModal.vue";
+ import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesModal.vue";
++import GroupModelsModal from "@/components/admin/group/GroupModelsModal.vue";
+ import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
+ import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffortPolicyFields.vue";
+ import CodexManifestAccountsField from "@/components/admin/group/CodexManifestAccountsField.vue";
+@@ -4865,7 +4882,7 @@ const canCopyAccountsFromGroup = (targetPlatform: GroupPlatform, sourcePlatform:
+ 
+ const copyAccountsGroupLabel = (g: AdminGroup) => {
+   const count = g.account_count || 0;
+-  const platform = t("admin.groups.platforms." + g.platform, platformLabel(g.platform));
++  const platform = t("admin.groups.platforms." + g.platform);
+   return `${g.name} - ${platform} (${t("admin.groups.accountsCount", { count })})`;
+ };
+ 
+@@ -4960,6 +4977,8 @@ const duplicatingGroupIds = reactive(new Set<number>());
+ const showRateMultipliersModal = ref(false);
+ const rateMultipliersGroup = ref<AdminGroup | null>(null);
+ const showRPMOverridesModal = ref(false);
++const showModelsModal = ref(false);
++const modelsModalGroup = ref<AdminGroup | null>(null);
+ const rpmOverridesGroup = ref<AdminGroup | null>(null);
+ const sortableGroups = ref<AdminGroup[]>([]);
+ type ConcreteGroupPlatform = Exclude<GroupPlatform, "composite">;
+@@ -5386,7 +5405,7 @@ const allowlistSourcesLabel = (modelID: string): string => {
+     ([model]) => model.toLowerCase() === modelID.toLowerCase()
+   );
+   if (!entry || entry[1].length === 0) return "";
+-  return entry[1].map(account => `${account.name}#${account.id}`).join("、");
++  return entry[1].map((account) => `${account.name}#${account.id}`).join("、");
+ };
+ 
+ const allowlistSourcesTitle = (modelID: string): string => {
+@@ -6581,6 +6600,11 @@ const handleRPMOverrides = (group: AdminGroup) => {
+   showRPMOverridesModal.value = true;
+ };
+ 
++const handleViewModels = (group: AdminGroup) => {
++  modelsModalGroup.value = group;
++  showModelsModal.value = true;
++};
++
+ const handleDuplicate = async (group: AdminGroup) => {
+   if (duplicatingGroupIds.has(group.id)) return;
+ 
+@@ -6610,7 +6634,7 @@ const formatCompositeEndpoint = (endpoint: CompositeRouteEndpoint) =>
+ 
+ const formatCompositePlatform = (platform: string) => {
+   if (!platform) return "—";
+-  return t(`admin.groups.platforms.${platform}`, platformLabel(platform));
++  return t(`admin.groups.platforms.${platform}`);
+ };
+ 
+ const compositeRouteSourceLabel = (source: string) => {
+diff --git a/frontend/src/i18n/locales/zh/admin/overview.ts b/frontend/src/i18n/locales/zh/admin/overview.ts
+index 9f38cd13d..58dbcae65 100644
+--- a/frontend/src/i18n/locales/zh/admin/overview.ts
++++ b/frontend/src/i18n/locales/zh/admin/overview.ts
+@@ -978,7 +978,6 @@ export default {
+         deepseek: 'DeepSeek',
+         minimax: 'MiniMax',
+         opencode_go: 'OpenCode',
+-        typesafe: 'TypeSafe / Jev',
+         composite: 'Composite',
+       },
+       saving: '保存中...',
+diff --git a/frontend/src/i18n/locales/en/admin/overview.ts b/frontend/src/i18n/locales/en/admin/overview.ts
+index c59c76e2a..81a148dac 100644
+--- a/frontend/src/i18n/locales/en/admin/overview.ts
++++ b/frontend/src/i18n/locales/en/admin/overview.ts
+@@ -1045,7 +1045,6 @@ export default {
+         deepseek: 'DeepSeek',
+         minimax: 'MiniMax',
+         opencode_go: 'OpenCode',
+-        typesafe: 'TypeSafe / Jev',
+         composite: 'Composite',
+       },
+       deleteConfirm:

@@ -65,6 +65,10 @@ ssh zeroxcore 'sudo STAGE=/home/ubuntu/fe_stage_xxx bash /tmp/fe_publish_design.
 4. 打包 JS 必须含 `plaza-data.json`（广场必须是数据驱动，不能是演示数据）；
 5. CSS 必须含 `#07080c` 与 `custom-open-fab`（Cosmic 设计）。
 
+**注意**：仓库里的 `fe_publish_design.sh` 是 BOM + CRLF，服务端 `bash` 会以
+`syntax error near unexpected token '('` 直接失败。发布请用 `fe_publish_design_ascii.sh`
+（纯 ASCII + LF，检查项完全一致，另加 `auto::rr` 一条）。
+
 发布只覆盖 `index.html`、`assets/index-*.js`、`assets/style-*.css`、`logo.svg`；
 `plaza-data.json`（后台定时生成，约每 10 分钟刷新）与历史 assets 一律保留。
 
@@ -91,3 +95,33 @@ curl $R https://api.zeroxcore.tech/assets/<新>.css | grep -o -i 07080c | wc -l 
 curl -s -H "x-api-key: $KEY" http://127.0.0.1:8080/api/v1/admin/accounts/34/antigravity-quota
 curl -s -H "x-api-key: $KEY" "http://127.0.0.1:8080/api/v1/admin/groups/14/model-allowlist-sources?platform=openai"
 ```
+
+## 6. 设计树与仓库 HEAD 的差异（`prod_design_delta_20261015.patch`）
+
+`frontend/`（仓库）与设计树不是同一棵树：设计树基于 upstream `v0.2.11`，另有本站定制
+（`GroupModelsModal`、去掉 `platformLabel` 回退、部分 i18n 条目差异等）。为让生产前端的
+改动可回放，`prod_design_delta_20261015.patch` 记录**设计树当前状态相对仓库 HEAD 的差异**
+（`git apply --check --cached` 已验证可通过）：
+
+| 文件 | 关系 |
+| --- | --- |
+| `src/views/admin/groupModelAllowlist.ts` | 与仓库 HEAD **逐字节一致**（无需补丁） |
+| `src/views/admin/GroupsView.vue` | 差异含本站定制 + auto 面板，补丁按文件替换 |
+| `src/i18n/locales/{zh,en}/admin/overview.ts` | 差异含既有文案差异 + auto 面板，补丁按文件替换 |
+
+即：`git apply docs/frontend-design/prod_design_delta_20261015.patch` 后，这三个文件
+与当前生产设计树一致。auto 智能路由面板本身（sentinel 从模型列表移入配置面板、
+提交时注入 `auto::rr`/`auto::rand`、真实 auto 模型共存警示）在仓库侧同样已实现，见
+commit `61e57dc9c`、`b2ddc6c0d`。
+
+设计树改动清单（本次）：
+
+1. `groupModelAllowlist.ts`：新增 `parseAutoSentinelEntry` / `setModelAllowlistAutoEnabled`
+   / `setModelAllowlistAutoStrategy`；`items` 不再承载 sentinel，`buildModelAllowlistConfig`
+   在开启时把 sentinel 注入 `models` 首位。
+2. `GroupsView.vue`（创建 + 编辑两个面板）：白名单列表上方新增「auto 智能路由」面板行
+   （AUTO 徽章 + 开关 + 轮询/随机选择 + 冲突警示），并在编辑列表给真实 auto 模型加
+   「真实模型」徽章；`resetModelAllowlistState` 同步重置 `autoEnabled`/`autoStrategy`
+   （否则面板状态会从上一个分组残留到下一个）。
+3. `overview.ts`(zh/en)：`modelAllowlist.auto.*` 文案。
+
