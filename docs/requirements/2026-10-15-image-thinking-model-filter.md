@@ -424,10 +424,22 @@ mappedModel := s.getMappedModelForThinkingLevel(
 2. 新增 `geminiThinkingLevelFromAntigravityCompat`：**客户端显式 effort 优先**，
    未给时才回退到 Claude thinking 配置（保持原有 Claude 客户端行为不变）。
 3. `prepareAntigravityCompatCall` 改用后者。
-4. 分组级挡位策略放开 antigravity 平台：`reasoningEffortValuesForPlatform` 增加
-   `PlatformAntigravity`，值域 `low/medium/high`（`antigravityReasoningEffortValues`），
-   错误提示同步更新；前端 `groupsReasoningEffort.ts` 的
-   `supportsReasoningEffortPolicyPlatform` / 值域 / 来源值域（antigravity 不提供 none）同步放开。
+4. ~~分组级挡位策略放开 antigravity 平台~~ —— **已回退**。
+   曾放开 `reasoningEffortValuesForPlatform`（后端）与 `groupsReasoningEffort.ts`（前端），
+   让 antigravity 分组能保存 `max_reasoning_effort`。但实测发现**转发链没有应用该上限的执行逻辑**：
+
+   ```
+   分组 23 设 max_reasoning_effort=low，客户端发 reasoning_effort=high
+   → HTTP 200，usage: effort=high | upstream=gemini-3.8-flash-high   ← 上限未生效
+   ```
+
+   即"能配置但不生效"的假功能，故前后端一并回退（`groups.max_reasoning_effort`
+   保持空值，分组 12/23 已确认恢复）。
+   **客户端挡位切换本身不受影响**——它走的是 §２ 的挡位推导，与分组上限无关。
+
+   若后续要支持分组级上限，需要同时：
+   - 覆盖 3 条转发链（`antigravity_gateway_gemini.go` / `_compat.go` / `_claude.go`）；
+   - 实现 `max_reasoning_effort_over_limit` 的 deny 语义（超限返回错误而非静默降级）。
 
 #### ✅ 验证（镜像 `sub2api-ag-quota:gemini-dial-20261015`）
 

@@ -147,20 +147,12 @@ func TestNormalizeReasoningEffortMappings(t *testing.T) {
 	})
 
 	t.Run("rejects mappings for non OpenAI platforms", func(t *testing.T) {
-		for _, platform := range []string{PlatformGemini, PlatformGrok} {
+		for _, platform := range []string{PlatformGemini, PlatformAntigravity, PlatformGrok} {
 			_, err := NormalizeReasoningEffortMappings(platform, []ReasoningEffortMapping{{From: "low", To: "high"}})
 			require.ErrorContains(t, err, "only supported for platforms")
 		}
 
-		// Antigravity（Gemini 走 OAuth 上游）现在受支持，但只开放上游真实存在的三档。
-		got, err := NormalizeReasoningEffortMappings(PlatformAntigravity, []ReasoningEffortMapping{{From: "low", To: "high"}})
-		require.NoError(t, err)
-		require.Equal(t, []ReasoningEffortMapping{{From: "low", To: "high"}}, got)
-
-		_, err = NormalizeReasoningEffortMappings(PlatformAntigravity, []ReasoningEffortMapping{{From: "xhigh", To: "high"}})
-		require.ErrorContains(t, err, "not supported for platform \"antigravity\"")
-
-		_, err = NormalizeReasoningEffortMappings(PlatformOpenAI, []ReasoningEffortMapping{{From: "ultra", To: "high"}})
+		_, err := NormalizeReasoningEffortMappings(PlatformOpenAI, []ReasoningEffortMapping{{From: "ultra", To: "high"}})
 		require.ErrorContains(t, err, "empty or unknown")
 	})
 
@@ -220,19 +212,10 @@ func TestNormalizeMaxReasoningEffortForPlatform(t *testing.T) {
 	_, err = normalizeMaxReasoningEffortForPlatform(PlatformAnthropic, "minimal")
 	require.ErrorContains(t, err, "not supported")
 
-	for _, platform := range []string{PlatformGemini, PlatformGrok} {
+	for _, platform := range []string{PlatformGemini, PlatformAntigravity, PlatformGrok} {
 		_, err = normalizeMaxReasoningEffortForPlatform(platform, "low")
 		require.ErrorContains(t, err, "only supported for platforms")
 	}
-
-	// Antigravity 的分组级挡位上限只开放上游真实存在的三档。
-	for _, effort := range []string{"low", "medium", "high"} {
-		value, err = normalizeMaxReasoningEffortForPlatform(PlatformAntigravity, effort)
-		require.NoError(t, err)
-		require.Equal(t, effort, value)
-	}
-	_, err = normalizeMaxReasoningEffortForPlatform(PlatformAntigravity, "xhigh")
-	require.ErrorContains(t, err, "not supported")
 
 	_, err = normalizeMaxReasoningEffortForPlatform(PlatformOpenAI, "none")
 	require.ErrorContains(t, err, "not supported")
