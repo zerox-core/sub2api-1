@@ -1,0 +1,508 @@
+diff --git "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\api\\admin\\groups.ts" "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\api\\admin\\groups.ts"
+index 6c6b717d7..40ccc0898 100644
+--- "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\api\\admin\\groups.ts"
++++ "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\api\\admin\\groups.ts"
+@@ -119,6 +119,38 @@ export async function getModelAllowlistCandidates(
+   return data.models || []
+ }
+ 
++export interface ModelAllowlistSource {
++  id: number
++  name: string
++}
++
++export interface ModelAllowlistSources {
++  /** 模型名 → 通过 model_mapping 声明它的账号 */
++  sources: Record<string, ModelAllowlistSource[]>
++  /** 组内无映射（透传型）的可调度账号：可服务白名单内任意模型 */
++  unmapped: ModelAllowlistSource[]
++}
++
++/**
++ * Get per-model source accounts for the group model allowlist.
++ * id=0 returns empty sources (create flow has no accounts yet).
++ */
++export async function getModelAllowlistSources(
++  id: number,
++  platform?: GroupPlatform
++): Promise<ModelAllowlistSources> {
++  const { data } = await apiClient.get<ModelAllowlistSources>(
++    `/admin/groups/${id}/model-allowlist-sources`,
++    {
++      params: platform ? { platform } : undefined
++    }
++  )
++  return {
++    sources: data?.sources || {},
++    unmapped: data?.unmapped || []
++  }
++}
++
+ /**
+  * Create new group
+  * @param groupData - Group data
+@@ -478,6 +510,7 @@ export const groupsAPI = {
+   getLiveCapability,
+   getById,
+   getModelAllowlistCandidates,
++  getModelAllowlistSources,
+   create,
+   duplicate,
+   update,
+diff --git "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\api\\admin\\accounts.ts" "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\api\\admin\\accounts.ts"
+index e504775fa..56cf02abd 100644
+--- "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\api\\admin\\accounts.ts"
++++ "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\api\\admin\\accounts.ts"
+@@ -1131,6 +1131,34 @@ export async function refreshOpenCodeGoUsage(id: number): Promise<OpenCodeGoUsag
+   return data
+ }
+ 
++// ====== Antigravity 配额摘要（retrieveUserQuotaSummary，不消耗对话额度） ======
++export interface AntigravityQuotaBucket {
++  bucket_id: string
++  window: string // "5h" | "weekly"
++  reset_time: string
++  remaining: number | null
++}
++
++export interface AntigravityQuotaGroup {
++  key: string // "gemini" | "third"
++  display_name: string
++  buckets: AntigravityQuotaBucket[]
++}
++
++export interface AntigravityQuotaSnapshot {
++  account_id: number
++  email?: string
++  fetched_at: string
++  groups: AntigravityQuotaGroup[]
++}
++
++export async function getAntigravityQuota(id: number, force = false): Promise<AntigravityQuotaSnapshot> {
++  const { data } = await apiClient.get<AntigravityQuotaSnapshot>(`/admin/accounts/${id}/antigravity-quota`, {
++    params: force ? { force: 1 } : {}
++  })
++  return data
++}
++
+ export const accountsAPI = {
+   list,
+   listWithEtag,
+@@ -1199,7 +1227,8 @@ export const accountsAPI = {
+   updateOpenCodeGoUsageSettings,
+   getOpenCodeGoUsage,
+   setOpenCodeGoUsageAutoRefresh,
+-  refreshOpenCodeGoUsage
++  refreshOpenCodeGoUsage,
++  getAntigravityQuota
+ }
+ 
+ export default accountsAPI
+diff --git "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\views\\admin\\GroupsView.vue" "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\views\\admin\\GroupsView.vue"
+index 1b3d4a0d4..8e324505b 100644
+--- "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\views\\admin\\GroupsView.vue"
++++ "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\views\\admin\\GroupsView.vue"
+@@ -2475,6 +2475,12 @@
+               >
+                 {{ t("admin.groups.modelAllowlist.empty") }}
+               </p>
++              <p
++                v-else-if="editModelAllowlistSources.unmapped.length > 0"
++                class="rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-400"
++              >
++                {{ t("admin.groups.modelAllowlist.unmappedHint", { names: editModelAllowlistSources.unmapped.map((a) => `${a.name}#${a.id}`).join("、") }) }}
++              </p>
+               <div
+                 v-for="(item, index) in editModelAllowlistState.items"
+                 :key="item.id"
+@@ -2493,6 +2499,13 @@
+                   >
+                     {{ t("admin.groups.modelAllowlist.wildcardTag") }}
+                   </span>
++                  <span
++                    v-if="allowlistSourcesLabel(item.id)"
++                    class="ml-1 whitespace-nowrap rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-dark-700 dark:text-gray-400"
++                    :title="allowlistSourcesTitle(item.id)"
++                  >
++                    {{ allowlistSourcesLabel(item.id) }}
++                  </span>
+                 </span>
+                 <button
+                   type="button"
+@@ -4288,6 +4301,7 @@ import { useAppStore } from "@/stores/app";
+ import { useAuthStore } from "@/stores/auth";
+ import { useOnboardingStore } from "@/stores/onboarding";
+ import { adminAPI } from "@/api/admin";
++import type { ModelAllowlistSources } from "@/api/admin/groups";
+ import type {
+   AdminGroup,
+   CodexModelsManifestConfig,
+@@ -4922,6 +4936,7 @@ const createCodexManifestDefaults = (): CodexModelsManifestConfig => ({
+ const editCodexManifestConfig = ref<CodexModelsManifestConfig>(createCodexManifestDefaults());
+ const editCodexManifestAccountNames = ref<Record<number, string>>({});
+ const modelAllowlistCandidatesTracker = createModelAllowlistCandidatesTracker();
++const editModelAllowlistSources = ref<ModelAllowlistSources>({ sources: {}, unmapped: [] });
+ const createModelAllowlistSelectedCount = computed(
+   () => createModelAllowlistState.items.filter((item) => item.selected).length,
+ );
+@@ -5255,6 +5270,17 @@ const loadModelAllowlistCandidates = async (
+       return;
+     }
+     setModelAllowlistCandidates(state, models);
++    // 来源账号仅编辑模式可查（新建分组还没有账号）；失败静默，不影响白名单本身
++    if (mode === "edit" && groupID > 0) {
++      try {
++        editModelAllowlistSources.value = await adminAPI.groups.getModelAllowlistSources(groupID, platform);
++      } catch (error) {
++        console.error("Error loading model allowlist sources:", error);
++        editModelAllowlistSources.value = { sources: {}, unmapped: [] };
++      }
++    } else {
++      editModelAllowlistSources.value = { sources: {}, unmapped: [] };
++    }
+   } catch (error) {
+     if (!modelAllowlistCandidatesTracker.isCurrent(requestID, request)) {
+       return;
+@@ -5267,6 +5293,21 @@ const loadModelAllowlistCandidates = async (
+   }
+ };
+ 
++// 模型白名单条目的来源账号标签（编辑模式；大小写不敏感匹配）
++const allowlistSourcesLabel = (modelID: string): string => {
++  const entry = Object.entries(editModelAllowlistSources.value.sources).find(
++    ([model]) => model.toLowerCase() === modelID.toLowerCase()
++  );
++  if (!entry || entry[1].length === 0) return "";
++  return entry[1].map((account) => `${account.name}#${account.id}`).join("、");
++};
++
++const allowlistSourcesTitle = (modelID: string): string => {
++  const label = allowlistSourcesLabel(modelID);
++  if (!label) return "";
++  return `${t("admin.groups.modelAllowlist.sourceTooltip")}: ${label}`;
++};
++
+ const moveCreateModelAllowlistItem = (fromIndex: number, toIndex: number) => {
+   moveModelAllowlistItem(createModelAllowlistState, fromIndex, toIndex);
+ };
+diff --git "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\views\\admin\\AccountsView.vue" "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\views\\admin\\AccountsView.vue"
+index 5df2c8afa..597e384c2 100644
+--- "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\views\\admin\\AccountsView.vue"
++++ "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\views\\admin\\AccountsView.vue"
+@@ -285,6 +285,7 @@
+           </template>
+           <template #cell-capacity="{ row }">
+             <AccountCapacityCell :account="row" />
++            <AntigravityQuotaCell v-if="row.platform === 'antigravity'" :account-id="row.id" />
+           </template>
+           <template #cell-status="{ row }">
+             <div class="flex items-center gap-1.5">
+@@ -519,6 +520,7 @@ import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
+ import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
+ import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
+ import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
++import AntigravityQuotaCell from '@/components/account/AntigravityQuotaCell.vue'
+ import UpstreamBillingRateCell from '@/components/account/UpstreamBillingRateCell.vue'
+ import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
+ import Icon from '@/components/icons/Icon.vue'
+diff --git "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\i18n\\locales\\zh\\admin\\overview.ts" "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\i18n\\locales\\zh\\admin\\overview.ts"
+index 56638d4bc..cc8ea5bac 100644
+--- "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\i18n\\locales\\zh\\admin\\overview.ts"
++++ "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\i18n\\locales\\zh\\admin\\overview.ts"
+@@ -1148,6 +1148,8 @@ export default {
+         selectAll: '全选',
+         invertSelection: '反选',
+         wildcardTag: '通配',
++        sourceTooltip: '来源账号',
++        unmappedHint: '组内有未映射（透传）账号：{names}，可服务白名单内任意模型；auto 候选池将包含白名单全部模型。',
+         customPlaceholder: '自定义条目，如 gpt-*-codex 或 claude-*',
+         addCustom: '添加',
+         emptySelectionError: '模型白名单已开启，请至少选择或添加一个模型条目',
+diff --git "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\i18n\\locales\\en\\admin\\overview.ts" "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\i18n\\locales\\en\\admin\\overview.ts"
+index b2d33b20c..6d246811d 100644
+--- "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\i18n\\locales\\en\\admin\\overview.ts"
++++ "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\i18n\\locales\\en\\admin\\overview.ts"
+@@ -1151,6 +1151,8 @@ export default {
+         selectAll: 'Select all',
+         invertSelection: 'Invert',
+         wildcardTag: 'wildcard',
++        sourceTooltip: 'Source accounts',
++        unmappedHint: 'Unmapped (passthrough) accounts in this group: {names}. They can serve any allowlisted model; the auto candidate pool will include every allowlisted model.',
+         customPlaceholder: 'Custom entry, e.g. gpt-*-codex or claude-*',
+         addCustom: 'Add',
+         emptySelectionError: 'The model allowlist is enabled; select or add at least one model entry',
+diff --git "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\components\\modelPlaza\\ModelPlazaContent.vue" "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\components\\modelPlaza\\ModelPlazaContent.vue"
+index 7b1962abc..6f6c927d8 100644
+--- "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\components\\modelPlaza\\ModelPlazaContent.vue"
++++ "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\components\\modelPlaza\\ModelPlazaContent.vue"
+@@ -1,29 +1,20 @@
+ <template>
+   <div class="space-y-6 text-zinc-100">
+-    <!-- 顶部官方基准价对比锚点看板 (用户要求) -->
++    <!-- 顶部价格计算规则看板 -->
+     <div class="relative overflow-hidden rounded-2xl border border-primary-500/30 bg-gradient-to-r from-[#0E1118]/95 via-primary-500/[0.08] to-[#0E1118]/95 p-5 backdrop-blur-xl shadow-xl">
+       <div class="absolute -right-20 -top-20 h-48 w-48 rounded-full bg-primary-500/10 blur-3xl"></div>
+       <div class="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+         <div class="space-y-2">
+           <div class="flex items-center gap-2">
+             <span class="inline-flex items-center gap-1.5 rounded-full border border-primary-500/40 bg-primary-500/20 px-3 py-0.5 text-xs font-mono font-bold text-primary-300">
+-              <span class="h-1.5 w-1.5 rounded-full bg-primary-400 animate-pulse"></span>
+-              💡 官方定价基准锚点参考
++              <span class="h-1.5 w-1.5 rounded-full bg-primary-400 animate-pulse"></span> 价格计算规则
+             </span>
+-            <span class="text-xs text-zinc-400 font-mono">上游公允估值对比</span>
++            <span class="text-xs text-zinc-400 font-mono">数据来自后台真实分组配置</span>
+           </div>
+           <div class="flex flex-wrap items-baseline gap-2">
+-            <h2 class="text-lg font-bold text-white">官方 DeepSeek-Flash 预算参考：</h2>
+-            <span class="font-mono text-xl font-extrabold text-primary-300">~$0.14 ~ $0.20 / 1M Token</span>
+-            <span class="text-xs text-zinc-400 font-mono">(按官方原价折合约 ¥1.00 ~ ¥1.45 每百万 Token)</span>
++            <h2 class="text-lg font-bold text-white">付费价格 = 官方原价 × 分组倍率</h2>
+           </div>
+-          <p class="text-xs text-zinc-300 max-w-3xl leading-relaxed">
+-            在本站「<strong>现时福利分组 (倍率低至 0.03)</strong>」专属通道下，因本站支持 <span class="text-amber-300 font-bold underline decoration-amber-500/50">1 元人民币 (RMB) = 1 刀余额 (USD)</span> 直充，同规格每百万 Token 预计折后实付仅需约
+-            <span class="font-mono font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-1.5 py-0.5 rounded">
+-              ~$0.0084 刀 (实付仅 ¥0.0084 元 / 百万 Token)
+-            </span>
+-            ，相比官方原价立省 <strong>99%</strong>，不到 1 分钱即可调用 100 万 Token！
+-          </p>
++          <p class="text-xs text-zinc-300 max-w-3xl leading-relaxed"> 本页展示当前开放分组与真实模型清单，倍率列为本站默认计费倍率；管理员调整分组配置后本页自动同步默认倍率。综合价按近 7 天全站真实消费折算（含缓存），与账单同口径；暂无真实用量的按官方输入目录价展示，实际计费以本站扣费为准。 </p>
+         </div>
+ 
+         <!-- 快速跳转分组筛选 -->
+@@ -69,7 +60,7 @@
+           <input
+             v-model="searchQuery"
+             type="text"
+-            placeholder="搜索模型，如 gpt6asutr, opus5.5..."
++            placeholder="搜索模型，如 gpt-6, claude-opus-5-5..."
+             class="w-full rounded-xl border border-white/10 bg-black/40 px-3.5 py-2 text-xs text-white placeholder-zinc-500 focus:border-primary-500/50 focus:outline-none focus:ring-1 focus:ring-primary-500/50"
+           />
+           <button
+@@ -300,10 +291,10 @@ const isRecalculating = ref<string | null>(null)
+ 
+ const platformTabs = [
+   { key: 'all', label: '全部支持分组' },
+-  { key: 'welfare', label: '🔥 现时福利分组 (0.03x)' },
+-  { key: 'openai', label: 'OpenAI 官方旗舰' },
+-  { key: 'anthropic', label: 'Anthropic Claude' },
+-  { key: 'google', label: 'Google Gemini' }
++  { key: 'gpt', label: 'OpenAI GPT / Codex' },
++  { key: 'claude', label: 'Anthropic Claude' },
++  { key: 'gemini', label: 'Google Gemini' },
++  { key: 'guomo', label: '国产模型渠道' }
+ ]
+ 
+ interface ModelItem {
+@@ -326,156 +317,18 @@ interface GroupItem {
+   models: ModelItem[]
+ }
+ 
+-// 丰富健全的全部分组数据（融合御三家 openAI--gpt6asutr, claude-opus5.5, google-3.8f，以及现时福利分组 0.03x）
+-const presetGroups = reactive<GroupItem[]>([
+-  {
+-    id: 'welfare-cluster',
+-    name: '现时福利分组 (Welfare Cluster)',
+-    platform: 'welfare',
+-    platformLabel: '超值算力专区 · 0.03x',
+-    description: '聚合国内外顶级主流大模型集群，专属特惠通道，倍率极低至 0.03，高并发高吞吐！',
+-    defaultRate: 0.03,
+-    currentRate: 0.03,
+-    isWelfare: true,
+-    models: [
+-      {
+-        name: 'deepseek-chat',
+-        type: 'llm',
+-        desc: 'DeepSeek V3 满血大模型，高性价比极速推理，通用知识与日常对话优选',
+-        officialBaseCost1M: 0.28
+-      },
+-      {
+-        name: 'deepseek-reasoner',
+-        type: 'llm',
+-        desc: 'DeepSeek R1 满血深度思考模型，超强数学解题、复杂架构设计与长逻辑推导',
+-        officialBaseCost1M: 0.55
+-      },
+-      {
+-        name: 'qwen-turbo',
+-        type: 'llm',
+-        desc: '通义千问极速轻量大模型，低时延代码补全与轻任务处理',
+-        officialBaseCost1M: 0.30
+-      },
+-      {
+-        name: 'flux-1-schnell',
+-        type: 'image',
+-        desc: '开源前沿生图模型极速推理通道，单张固定扣费，不参与 Token 测算',
+-        officialImageUnitPrice: 0.010
+-      }
+-    ]
+-  },
+-  {
+-    id: 'openai-flagship',
+-    name: 'OpenAI 官方旗舰组 (御三家)',
+-    platform: 'openai',
+-    platformLabel: 'OpenAI 官方直连通道',
+-    description: '主力支持 openAI--gpt6asutr 及全系列 Codex、o3-mini，企业级高可用分流',
+-    defaultRate: 0.85,
+-    currentRate: 0.85,
+-    models: [
+-      {
+-        name: 'openAI--gpt6asutr',
+-        type: 'llm',
+-        desc: 'OpenAI 次世代主力推理旗舰模型，极致代码能力与深度多步任务执行',
+-        officialBaseCost1M: 5.00
+-      },
+-      {
+-        name: 'o3-mini',
+-        type: 'llm',
+-        desc: '高性价比快速推理模型，支持多档思考程度调节与代码补全',
+-        officialBaseCost1M: 1.10
+-      },
+-      {
+-        name: 'gpt-4o',
+-        type: 'llm',
+-        desc: '经典全模态主力大模型，支持高质量图文解析与极速文本生成',
+-        officialBaseCost1M: 2.50
+-      },
+-      {
+-        name: 'text-embedding-3-large',
+-        type: 'embedding',
+-        desc: '高维向量语义模型，用于 RAG 知识库检索与文档相似度聚类',
+-        officialBaseCost1M: 0.13
+-      },
+-      {
+-        name: 'dall-e-3',
+-        type: 'image',
+-        desc: '精准自然语言文生图，单张按次计费，不计 Token',
+-        officialImageUnitPrice: 0.040
+-      }
+-    ]
+-  },
+-  {
+-    id: 'anthropic-claude',
+-    name: 'Anthropic Claude 组 (御三家)',
+-    platform: 'anthropic',
+-    platformLabel: 'Claude 官方正版通道',
+-    description: '主力支持 claude-opus5.5，原生支持 Extended Thinking 思考协议与 Prompt Caching',
+-    defaultRate: 0.40,
+-    currentRate: 0.40,
+-    models: [
+-      {
+-        name: 'claude-opus5.5',
+-        type: 'llm',
+-        desc: 'Claude 超级推理旗舰，长文本理解、复杂工程架构设计与数学证明天花板',
+-        officialBaseCost1M: 15.00
+-      },
+-      {
+-        name: 'claude-sonnet-5',
+-        type: 'llm',
+-        desc: 'Claude Code 与 Cursor 首选主力，超快响应速度，支持 Prompt 缓存减免 90%',
+-        officialBaseCost1M: 3.00
+-      },
+-      {
+-        name: 'claude-fable-5-1',
+-        type: 'llm',
+-        desc: '企业专属大上下文增强版通道，专治长会话与巨型代码库分析',
+-        officialBaseCost1M: 20.00
+-      },
+-      {
+-        name: 'claude-haiku-4.5',
+-        type: 'llm',
+-        desc: '极速轻量通道，低延迟即时回复与批量数据抽取清洗',
+-        officialBaseCost1M: 0.80
+-      }
+-    ]
+-  },
+-  {
+-    id: 'google-gemini',
+-    name: 'Google Gemini 组 (御三家)',
+-    platform: 'google',
+-    platformLabel: 'Google 原生多模态通道',
+-    description: '主力支持 google-3.8f，超大 200 万 Token 上下文全速响应',
+-    defaultRate: 0.70,
+-    currentRate: 0.70,
+-    models: [
+-      {
+-        name: 'google-3.8f',
+-        type: 'llm',
+-        desc: 'Gemini 3.8 Flash，超高吞吐、毫秒级首字延迟，适合长文档总结与多轮对话',
+-        officialBaseCost1M: 0.15
+-      },
+-      {
+-        name: 'gemini-2.5-flash',
+-        type: 'llm',
+-        desc: '2M 超大上下文多模态主力，原生解析视频、音频与整本技术手册',
+-        officialBaseCost1M: 0.15
+-      },
+-      {
+-        name: 'gemini-2.5-pro',
+-        type: 'llm',
+-        desc: '企业级高级多模态推理模型，擅长图表分析、跨语言翻译与学术推导',
+-        officialBaseCost1M: 1.25
+-      },
+-      {
+-        name: 'imagen-3',
+-        type: 'image',
+-        desc: 'Google 最新写实画风图像生成模型，按张独立计费',
+-        officialImageUnitPrice: 0.030
+-      }
+-    ]
+-  }
+-])
++// 分组与模型清单来自后台生成的 /plaza-data.json（管理员调整分组配置后自动同步）
++const presetGroups = reactive<GroupItem[]>([])
++fetch(`/plaza-data.json?t=${Date.now()}`)
++  .then((res) => res.json())
++  .then((data) => {
++    if (Array.isArray(data?.groups)) {
++      presetGroups.push(...(data.groups as GroupItem[]))
++    }
++  })
++  .catch(() => {
++    // 静默失败：拿不到数据时宁可为空，也不展示演示数据
++  })
+ 
+ // 计算每百万 Token 预计花费（不分开算输入输出缓存，直接综合折算单价）
+ function calculateCost1M(baseCost1M: number, rateMultiplier: number): string {
+diff --git "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\components\\home\\VendorCards.vue" "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\components\\home\\VendorCards.vue"
+index f50e3e116..503980b98 100644
+--- "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\src\\components\\home\\VendorCards.vue"
++++ "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\src\\components\\home\\VendorCards.vue"
+@@ -143,7 +143,7 @@ const vendors: VendorItem[] = [
+     id: 'openai',
+     name: 'OpenAI 官方旗舰',
+     tag: '御三家旗舰 · 原生直连',
+-    desc: '主力支持 openAI--gpt6asutr 及全系列 Codex、o3-mini 高可用通道',
++    desc: '主力支持 gpt-6.1-sol 及全系列 Codex 高可用通道',
+     iconBg: 'linear-gradient(135deg, #10B981 0%, #081C15 100%)',
+     iconSvg: `<svg viewBox="0 0 24 24" fill="white"><path d="M22.28 9.94a5.95 5.95 0 0 0-.52-4.91 6.05 6.05 0 0 0-6.52-2.8A6.06 6.06 0 0 0 10.7.35a6.05 6.05 0 0 0-5.78 4.2 6.04 6.04 0 0 0-3.9 2.84 6.05 6.05 0 0 0 .74 7.07 5.96 5.96 0 0 0 .52 4.9 6.05 6.05 0 0 0 6.52 2.82 6.04 6.04 0 0 0 4.54 1.88 6.05 6.05 0 0 0 5.78-4.2 6.04 6.04 0 0 0 3.9-2.84 6.05 6.05 0 0 0-.74-7.08z"/></svg>`,
+     ping: '28ms 专线直达',
+@@ -157,7 +157,7 @@ const vendors: VendorItem[] = [
+     id: 'anthropic',
+     name: 'Anthropic Claude',
+     tag: '御三家旗舰 · 官方源',
+-    desc: '主力支持 claude-opus5.5，原生思考协议与 Prompt Caching',
++    desc: '主力支持 claude-opus-5-5，原生思考协议与 Prompt Caching',
+     iconBg: 'linear-gradient(135deg, #CC785C 0%, #1F1916 100%)',
+     iconSvg: `<svg viewBox="0 0 24 24" fill="white"><path d="M17.47 3.03H13.8L8.68 15.65h3.66l1.09-2.73h4.37l1.07 2.73h3.76L17.47 3.03zm-2.81 7.21l1.1-2.83 1.12 2.83h-2.22zM6.53 3.03H2.87L8 15.65h3.66L6.53 3.03z"/></svg>`,
+     ping: '24ms 极速响应',
+@@ -171,7 +171,7 @@ const vendors: VendorItem[] = [
+     id: 'google',
+     name: 'Google Gemini',
+     tag: '御三家旗舰 · 多模态',
+-    desc: '主力支持 google-3.8f，超大上下文窗口全速支持',
++    desc: '主力支持 gemini-3.8-flash-high，超大上下文窗口全速支持',
+     iconBg: 'linear-gradient(135deg, #F59E0B 0%, #261605 100%)',
+     iconSvg: `<svg viewBox="0 0 24 24" fill="white"><path d="M12 24c6.627 0 12-5.373 12-12S18.627 0 12 0 0 5.373 0 12s5.373 12 12 12zm0-4.5a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15z"/></svg>`,
+     ping: '32ms 亚太直连',
+diff --git "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\index.html" "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\index.html"
+index 245db6296..ceeab286b 100644
+--- "F:\\backups\\sub2api-design-20261015\\frontend-design-src\\index.html"
++++ "F:\\aily_scratch\\fe_build\\src\\sub2api-0.2.11\\frontend\\index.html"
+@@ -5,6 +5,7 @@
+     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+     <title>Sub2API - AI API Gateway</title>
++    <script>try{if(!localStorage.getItem("theme")){localStorage.setItem("theme","dark")};if(localStorage.getItem("theme")==="dark"||!localStorage.getItem("theme")){document.documentElement.classList.add("dark")}}catch(e){}</script>
+   </head>
+   <body>
+     <div id="app"></div>
