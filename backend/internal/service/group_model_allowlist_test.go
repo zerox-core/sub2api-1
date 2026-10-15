@@ -289,6 +289,38 @@ func TestGroupModelAllowlistFilterForListing(t *testing.T) {
 		}
 	})
 
+	t.Run("auto sentinel lists as its client-facing base name", func(t *testing.T) {
+		cfg := GroupModelAllowlist{Enabled: true, Models: []string{"auto::rr", "gpt-5.4"}}
+		got := cfg.FilterForListing(source)
+		want := []string{"auto", "gpt-5.4"}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("got %#v want %#v", got, want)
+		}
+		if !cfg.Allows("auto") {
+			t.Fatal("auto sentinel must admit the bare base name")
+		}
+	})
+
+	t.Run("auto sentinel dedupes against a real auto model in source", func(t *testing.T) {
+		cfg := GroupModelAllowlist{Enabled: true, Models: []string{"auto::rr"}}
+		got := cfg.FilterForListing([]string{"auto"})
+		if strings.Join(got, ",") != "auto" {
+			t.Fatalf("expected single auto entry, got %#v", got)
+		}
+	})
+
+	t.Run("random sentinel lists as its base name too", func(t *testing.T) {
+		cfg := GroupModelAllowlist{Enabled: true, Models: []string{"smart::rand"}}
+		got := cfg.FilterForListing(nil)
+		if len(got) != 0 {
+			t.Fatalf("empty source yields empty output, got %#v", got)
+		}
+		got = cfg.FilterForListing([]string{"smart"})
+		if strings.Join(got, ",") != "smart" {
+			t.Fatalf("sentinel should output base name, got %#v", got)
+		}
+	})
+
 	t.Run("empty source yields empty output", func(t *testing.T) {
 		cfg := GroupModelAllowlist{Enabled: true, Models: []string{"gpt-5.4"}}
 		if got := cfg.FilterForListing(nil); len(got) != 0 {

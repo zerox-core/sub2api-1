@@ -171,6 +171,8 @@ func groupModelAllowlistCandidates(model string) []string {
 // 当 source 是前缀通配模式且白名单模式的固定前缀位于该前缀之内时，
 // 可直接输出白名单模式：它的所有实例都属于 source。其他未处理的无限
 // 交集不会被枚举为模型 ID，列表可能省略仍可请求的模型。
+// auto sentinel（auto::rr / auto::rand）输出为客户端书写名（如 auto），
+// 与真实同名模型全局去重：真实模型在 source 中时优先输出真实模型。
 func (a GroupModelAllowlist) FilterForListing(source []string) []string {
 	if !a.Enabled {
 		return source
@@ -206,6 +208,12 @@ func (a GroupModelAllowlist) FilterForListing(source []string) []string {
 	for _, entry := range a.Models {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
+			continue
+		}
+		// auto sentinel 不以原始形态出现在列表中：统一输出客户端书写名（如 auto）。
+		// Allows 准入对基名与 sentinel 等价放行，所以「列表可见 = 可请求」保持成立。
+		if name, _, ok := ParseAutoSentinel(entry); ok {
+			add(name)
 			continue
 		}
 		if strings.Contains(entry, "*") {

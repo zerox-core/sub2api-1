@@ -1157,6 +1157,15 @@ export default {
         customPlaceholder: 'Custom entry, e.g. gpt-*-codex or claude-*',
         addCustom: 'Add',
         emptySelectionError: 'The model allowlist is enabled; select or add at least one model entry',
+        auto: {
+          title: 'auto smart routing',
+          hint: 'When enabled, requests for auto are served by the gateway picking one of the currently schedulable, checked models automatically — no need to keep auto as a plain model entry. The candidate pool is dynamic: rate-limited or offline accounts are skipped.',
+          strategy: 'Strategy',
+          strategyRR: 'Round robin',
+          strategyRand: 'Random',
+          realModelTag: 'real model',
+          realModelTooltip: 'This auto is a real model provided by an upstream account (not the smart router); selecting it forwards auto requests directly to that model.'
+        },
         errors: {
           empty: 'Please enter a model entry',
           duplicate: 'This entry already exists'

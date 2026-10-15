@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   addCustomModelAllowlistItem,
+  buildModelAllowlistConfig,
   createModelAllowlistState,
   type ModelAllowlistAddError,
+  setModelAllowlistAutoEnabled,
+  setModelAllowlistAutoStrategy,
 } from "../groupModelAllowlist";
 
 import {
-  buildModelAllowlistConfig,
-  createModelAllowlistState,
   hydrateModelAllowlistState,
   invertModelAllowlistSelection,
   moveModelAllowlistItem,
@@ -160,5 +161,65 @@ describe("addCustomModelAllowlistItem", () => {
   it("rejects duplicates case-insensitively", () => {
     const s = state();
     expect(addCustomModelAllowlistItem(s, "GPT-5.4")).toBe<ModelAllowlistAddError>("duplicate");
+  });
+});
+
+describe("auto smart-routing panel", () => {
+  it("keeps sentinel out of items and hydrates panel from saved config", () => {
+    const state = createModelAllowlistState({
+      enabled: true,
+      models: ["auto::rr", "gpt-5.4"],
+    });
+
+    expect(state.autoEnabled).toBe(true);
+    expect(state.autoStrategy).toBe("rr");
+    expect(state.items.map((item) => item.id)).not.toContain("auto::rr");
+  });
+
+  it("injects the sentinel as the first model on submit when enabled", () => {
+    const state = hydrateModelAllowlistState({ enabled: true, models: ["gpt-5.4"] }, ["gpt-5.4", "gpt-5.5"]);
+    expect(state.autoEnabled).toBe(false);
+
+    setModelAllowlistAutoEnabled(state, true);
+    expect(buildModelAllowlistConfig(state).models).toEqual(["auto::rr", "gpt-5.4"]);
+
+    setModelAllowlistAutoStrategy(state, "rand");
+    expect(buildModelAllowlistConfig(state).models).toEqual(["auto::rand", "gpt-5.4"]);
+  });
+
+  it("drops the sentinel from the payload when the panel is turned off", () => {
+    const state = createModelAllowlistState({
+      enabled: true,
+      models: ["auto::rand", "gpt-5.4"],
+    });
+    setModelAllowlistAutoEnabled(state, false);
+
+    expect(buildModelAllowlistConfig(state).models).toEqual(["gpt-5.4"]);
+  });
+
+  it("keeps the sentinel first even when items order changes", () => {
+    const state = hydrateModelAllowlistState({
+      enabled: true,
+      models: ["auto::rr", "gpt-5.4", "gpt-5.5"],
+    }, ["auto::rr", "gpt-5.4", "gpt-5.5"]);
+    moveModelAllowlistItem(state, 0, 1);
+
+    expect(buildModelAllowlistConfig(state).models).toEqual(["auto::rr", "gpt-5.5", "gpt-5.4"]);
+  });
+
+  it("strips stray sentinel candidates coming from the backend", () => {
+    const state = createModelAllowlistState({ enabled: true, models: [] });
+    setModelAllowlistCandidates(state, ["auto::rr", "gpt-5.4"]);
+
+    expect(state.items.map((item) => item.id)).toEqual(["gpt-5.4"]);
+  });
+
+  it("recognizes legacy random strategy aliases from saved config", () => {
+    const state = createModelAllowlistState({
+      enabled: true,
+      models: ["auto::random"],
+    });
+    expect(state.autoEnabled).toBe(true);
+    expect(state.autoStrategy).toBe("rand");
   });
 });
