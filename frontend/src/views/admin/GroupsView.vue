@@ -800,7 +800,7 @@
                 <button
                   type="button"
                   class="rounded px-2 py-1 font-medium text-primary-600 transition-colors hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20"
-                  @click="selectAllModelAllowlistItems(createModelAllowlistState)"
+                  @click="selectAllVisibleCreateModelAllowlistItems"
                 >
                   {{ t("admin.groups.modelAllowlist.selectAll") }}
                 </button>
@@ -812,6 +812,86 @@
                   {{ t("admin.groups.modelAllowlist.invertSelection") }}
                 </button>
               </div>
+            </div>
+            <!-- R7：搜索 / 模态筛选 / 排序 / 只看已选。分组 14 有 189 个模型，
+                 没有这几项就只能靠肉眼翻。「全选」与「取消选择」都只作用于筛选结果，
+                 另外按 id 定位，重排过也不会点错条目。 -->
+            <div
+              class="flex flex-wrap items-center gap-2 border-b border-gray-200 bg-gray-50/60 px-3 py-2 dark:border-dark-600 dark:bg-dark-800/60"
+            >
+              <input
+                v-model="createAllowlistFilter.query"
+                type="search"
+                :placeholder="t('admin.groups.modelAllowlist.searchPlaceholder')"
+                class="min-w-[9rem] flex-1 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:border-primary-500 focus:outline-none dark:border-dark-500 dark:bg-dark-700 dark:text-gray-200"
+              />
+              <select
+                v-model="createAllowlistFilter.sortBy"
+                class="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:border-primary-500 focus:outline-none dark:border-dark-500 dark:bg-dark-700 dark:text-gray-200"
+              >
+                <option
+                  v-for="option in allowlistSortOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+              <button
+                type="button"
+                class="rounded border px-2 py-1 text-xs font-medium transition-colors"
+                :class="
+                  createAllowlistFilter.onlySelected
+                    ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
+                    : 'border-gray-300 text-gray-600 hover:bg-gray-100 dark:border-dark-500 dark:text-gray-300 dark:hover:bg-dark-700'
+                "
+                @click="createAllowlistFilter.onlySelected = !createAllowlistFilter.onlySelected"
+              >
+                {{ t("admin.groups.modelAllowlist.onlySelected") }}
+              </button>
+            </div>
+            <div
+              class="flex flex-wrap items-center gap-1.5 border-b border-gray-200 bg-gray-50/60 px-3 py-2 dark:border-dark-600 dark:bg-dark-800/60"
+            >
+              <span class="mr-1 text-[11px] text-gray-500 dark:text-gray-400">
+                {{ t("admin.groups.modelAllowlist.modalityFilter") }}
+              </span>
+              <button
+                v-for="modality in allowlistModalityOptions"
+                :key="modality"
+                type="button"
+                class="rounded px-2 py-0.5 text-[11px] font-medium transition-colors"
+                :class="
+                  createAllowlistFilter.modalities.includes(modality)
+                    ? 'bg-primary-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-300 dark:hover:bg-dark-600'
+                "
+                @click="toggleCreateAllowlistModality(modality)"
+              >
+                {{ t(`admin.groups.modelAllowlist.modality.${modality}`) }}
+              </button>
+              <span class="ml-auto text-[11px] text-gray-500 dark:text-gray-400">
+                {{
+                  t("admin.groups.modelAllowlist.visibleSummary", {
+                    visible: filteredCreateModelAllowlistItems.length,
+                    total: createModelAllowlistState.items.length,
+                  })
+                }}
+              </span>
+              <button
+                type="button"
+                class="rounded px-2 py-0.5 text-[11px] font-medium text-primary-600 transition-colors hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20"
+                @click="selectAllVisibleCreateModelAllowlistItems"
+              >
+                {{ t("admin.groups.modelAllowlist.selectAllFiltered") }}
+              </button>
+              <button
+                type="button"
+                class="rounded px-2 py-0.5 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
+                @click="clearVisibleCreateModelAllowlistItems"
+              >
+                {{ t("admin.groups.modelAllowlist.clearSelection") }}
+              </button>
             </div>
             <!-- auto 智能路由面板：sentinel 不再以普通条目出现在模型列表里，
                  开启后提交时自动作为首条 sentinel 注入（如 auto::rr）。 -->
@@ -873,8 +953,14 @@
               >
                 {{ t("admin.groups.modelAllowlist.empty") }}
               </p>
+              <p
+                v-else-if="filteredCreateModelAllowlistItems.length === 0"
+                class="text-xs text-gray-500 dark:text-gray-400"
+              >
+                {{ t("admin.groups.modelAllowlist.noMatch") }}
+              </p>
               <div
-                v-for="(item, index) in createModelAllowlistState.items"
+                v-for="item in filteredCreateModelAllowlistItems"
                 :key="item.id"
                 class="flex items-center gap-2 rounded border border-gray-200 bg-white px-3 py-2 dark:border-dark-600 dark:bg-dark-800"
               >
@@ -891,20 +977,43 @@
                   >
                     {{ t("admin.groups.modelAllowlist.wildcardTag") }}
                   </span>
+                  <span
+                    v-for="modality in createModelAllowlistModalities[item.id] ?? []"
+                    :key="modality"
+                    class="ml-1 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-dark-700 dark:text-gray-300"
+                  >
+                    {{ t(`admin.groups.modelAllowlist.modality.${modality}`) }}
+                  </span>
                 </span>
                 <button
                   type="button"
-                  :disabled="index === 0"
+                  :disabled="
+                    !createAllowlistReorderEnabled ||
+                    !canMoveCreateModelAllowlistItem(item.id, -1)
+                  "
+                  :title="
+                    createAllowlistReorderEnabled
+                      ? undefined
+                      : t('admin.groups.modelAllowlist.moveNeedsDefaultOrder')
+                  "
                   class="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-40 dark:hover:bg-dark-600 dark:hover:text-gray-200"
-                  @click="moveCreateModelAllowlistItem(index, index - 1)"
+                  @click="moveCreateModelAllowlistItem(item.id, -1)"
                 >
                   <Icon name="arrowUp" size="sm" />
                 </button>
                 <button
                   type="button"
-                  :disabled="index === createModelAllowlistState.items.length - 1"
+                  :disabled="
+                    !createAllowlistReorderEnabled ||
+                    !canMoveCreateModelAllowlistItem(item.id, 1)
+                  "
+                  :title="
+                    createAllowlistReorderEnabled
+                      ? undefined
+                      : t('admin.groups.modelAllowlist.moveNeedsDefaultOrder')
+                  "
                   class="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-40 dark:hover:bg-dark-600 dark:hover:text-gray-200"
-                  @click="moveCreateModelAllowlistItem(index, index + 1)"
+                  @click="moveCreateModelAllowlistItem(item.id, 1)"
                 >
                   <Icon name="arrowDown" size="sm" />
                 </button>
@@ -2488,7 +2597,7 @@
                 <button
                   type="button"
                   class="rounded px-2 py-1 font-medium text-primary-600 transition-colors hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20"
-                  @click="selectAllModelAllowlistItems(editModelAllowlistState)"
+                  @click="selectAllVisibleEditModelAllowlistItems"
                 >
                   {{ t("admin.groups.modelAllowlist.selectAll") }}
                 </button>
@@ -2500,6 +2609,84 @@
                   {{ t("admin.groups.modelAllowlist.invertSelection") }}
                 </button>
               </div>
+            </div>
+            <!-- R7：搜索 / 模态筛选 / 排序 / 只看已选（编辑面板同创建面板）。 -->
+            <div
+              class="flex flex-wrap items-center gap-2 border-b border-gray-200 bg-gray-50/60 px-3 py-2 dark:border-dark-600 dark:bg-dark-800/60"
+            >
+              <input
+                v-model="editAllowlistFilter.query"
+                type="search"
+                :placeholder="t('admin.groups.modelAllowlist.searchPlaceholder')"
+                class="min-w-[9rem] flex-1 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:border-primary-500 focus:outline-none dark:border-dark-500 dark:bg-dark-700 dark:text-gray-200"
+              />
+              <select
+                v-model="editAllowlistFilter.sortBy"
+                class="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:border-primary-500 focus:outline-none dark:border-dark-500 dark:bg-dark-700 dark:text-gray-200"
+              >
+                <option
+                  v-for="option in allowlistSortOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+              <button
+                type="button"
+                class="rounded border px-2 py-1 text-xs font-medium transition-colors"
+                :class="
+                  editAllowlistFilter.onlySelected
+                    ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
+                    : 'border-gray-300 text-gray-600 hover:bg-gray-100 dark:border-dark-500 dark:text-gray-300 dark:hover:bg-dark-700'
+                "
+                @click="editAllowlistFilter.onlySelected = !editAllowlistFilter.onlySelected"
+              >
+                {{ t("admin.groups.modelAllowlist.onlySelected") }}
+              </button>
+            </div>
+            <div
+              class="flex flex-wrap items-center gap-1.5 border-b border-gray-200 bg-gray-50/60 px-3 py-2 dark:border-dark-600 dark:bg-dark-800/60"
+            >
+              <span class="mr-1 text-[11px] text-gray-500 dark:text-gray-400">
+                {{ t("admin.groups.modelAllowlist.modalityFilter") }}
+              </span>
+              <button
+                v-for="modality in allowlistModalityOptions"
+                :key="modality"
+                type="button"
+                class="rounded px-2 py-0.5 text-[11px] font-medium transition-colors"
+                :class="
+                  editAllowlistFilter.modalities.includes(modality)
+                    ? 'bg-primary-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-300 dark:hover:bg-dark-600'
+                "
+                @click="toggleEditAllowlistModality(modality)"
+              >
+                {{ t(`admin.groups.modelAllowlist.modality.${modality}`) }}
+              </button>
+              <span class="ml-auto text-[11px] text-gray-500 dark:text-gray-400">
+                {{
+                  t("admin.groups.modelAllowlist.visibleSummary", {
+                    visible: filteredEditModelAllowlistItems.length,
+                    total: editModelAllowlistState.items.length,
+                  })
+                }}
+              </span>
+              <button
+                type="button"
+                class="rounded px-2 py-0.5 text-[11px] font-medium text-primary-600 transition-colors hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20"
+                @click="selectAllVisibleEditModelAllowlistItems"
+              >
+                {{ t("admin.groups.modelAllowlist.selectAllFiltered") }}
+              </button>
+              <button
+                type="button"
+                class="rounded px-2 py-0.5 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
+                @click="clearVisibleEditModelAllowlistItems"
+              >
+                {{ t("admin.groups.modelAllowlist.clearSelection") }}
+              </button>
             </div>
             <!-- auto 智能路由面板（编辑）：同创建面板，sentinel 提交时注入首条。 -->
             <div class="border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-dark-600 dark:bg-dark-800">
@@ -2566,8 +2753,14 @@
               >
                 {{ t("admin.groups.modelAllowlist.unmappedHint", { names: editModelAllowlistSources.unmapped.map((a) => `${a.name}#${a.id}`).join("、") }) }}
               </p>
+              <p
+                v-else-if="filteredEditModelAllowlistItems.length === 0"
+                class="text-xs text-gray-500 dark:text-gray-400"
+              >
+                {{ t("admin.groups.modelAllowlist.noMatch") }}
+              </p>
               <div
-                v-for="(item, index) in editModelAllowlistState.items"
+                v-for="item in filteredEditModelAllowlistItems"
                 :key="item.id"
                 class="flex items-center gap-2 rounded border border-gray-200 bg-white px-3 py-2 dark:border-dark-600 dark:bg-dark-800"
               >
@@ -2598,20 +2791,43 @@
                   >
                     {{ allowlistSourcesLabel(item.id) }}
                   </span>
+                  <span
+                    v-for="modality in editModelAllowlistModalities[item.id] ?? []"
+                    :key="modality"
+                    class="ml-1 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-dark-700 dark:text-gray-300"
+                  >
+                    {{ t(`admin.groups.modelAllowlist.modality.${modality}`) }}
+                  </span>
                 </span>
                 <button
                   type="button"
-                  :disabled="index === 0"
+                  :disabled="
+                    !editAllowlistReorderEnabled ||
+                    !canMoveEditModelAllowlistItem(item.id, -1)
+                  "
+                  :title="
+                    editAllowlistReorderEnabled
+                      ? undefined
+                      : t('admin.groups.modelAllowlist.moveNeedsDefaultOrder')
+                  "
                   class="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-40 dark:hover:bg-dark-600 dark:hover:text-gray-200"
-                  @click="moveEditModelAllowlistItem(index, index - 1)"
+                  @click="moveEditModelAllowlistItem(item.id, -1)"
                 >
                   <Icon name="arrowUp" size="sm" />
                 </button>
                 <button
                   type="button"
-                  :disabled="index === editModelAllowlistState.items.length - 1"
+                  :disabled="
+                    !editAllowlistReorderEnabled ||
+                    !canMoveEditModelAllowlistItem(item.id, 1)
+                  "
+                  :title="
+                    editAllowlistReorderEnabled
+                      ? undefined
+                      : t('admin.groups.modelAllowlist.moveNeedsDefaultOrder')
+                  "
                   class="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-40 dark:hover:bg-dark-600 dark:hover:text-gray-200"
-                  @click="moveEditModelAllowlistItem(index, index + 1)"
+                  @click="moveEditModelAllowlistItem(item.id, 1)"
                 >
                   <Icon name="arrowDown" size="sm" />
                 </button>
@@ -4453,13 +4669,21 @@ import {
 import {
   addCustomModelAllowlistItem,
   buildModelAllowlistConfig,
+  canMoveModelAllowlistItemByID,
+  clearModelAllowlistSelection,
   createModelAllowlistState as createInitialModelAllowlistState,
+  createModelAllowlistViewFilter,
+  filterModelAllowlistItems,
   invertModelAllowlistSelection,
-  moveModelAllowlistItem,
+  modelAllowlistModalityOptions,
+  moveModelAllowlistItemByID,
   selectAllModelAllowlistItems,
   setModelAllowlistAutoEnabled,
   setModelAllowlistAutoStrategy,
   setModelAllowlistCandidates,
+  toggleModelAllowlistModality,
+  type ModelAllowlistSortKey,
+  type ModelAllowlistViewFilter,
 } from "./groupModelAllowlist";
 import { createModelAllowlistCandidatesTracker } from "./modelAllowlistCandidates";
 import { normalizeSupportedModelScopesForPlatform } from "./groupsSupportedModelScopes";
@@ -5028,6 +5252,97 @@ const createModelAllowlistSelectedCount = computed(
 const editModelAllowlistSelectedCount = computed(
   () => editModelAllowlistState.items.filter((item) => item.selected).length,
 );
+
+// ===== R7：候选模型的搜索 / 模态筛选 / 排序 =====
+// 候选清单和能力标签由同一个端点返回（后端 service.model_capability.go 判定），
+// 所以面板上的「图像 / 音频」标签与网关实际能力判定是同一份逻辑。
+const createAllowlistFilter = ref<ModelAllowlistViewFilter>(createModelAllowlistViewFilter());
+const editAllowlistFilter = ref<ModelAllowlistViewFilter>(createModelAllowlistViewFilter());
+const createModelAllowlistModalities = ref<Record<string, string[]>>({});
+const editModelAllowlistModalities = ref<Record<string, string[]>>({});
+
+const createModelAllowlistModalityOf = (modelID: string): string[] =>
+  createModelAllowlistModalities.value[modelID] ?? ["text"];
+const editModelAllowlistModalityOf = (modelID: string): string[] =>
+  editModelAllowlistModalities.value[modelID] ?? ["text"];
+
+const filteredCreateModelAllowlistItems = computed(() =>
+  filterModelAllowlistItems(
+    createModelAllowlistState,
+    createAllowlistFilter.value,
+    createModelAllowlistModalityOf,
+  ),
+);
+const filteredEditModelAllowlistItems = computed(() =>
+  filterModelAllowlistItems(
+    editModelAllowlistState,
+    editAllowlistFilter.value,
+    editModelAllowlistModalityOf,
+  ),
+);
+
+// 排序状态下禁用上移/下移：渲染序号不再等于真实下标，按键位置会和条目对不上。
+const createAllowlistReorderEnabled = computed(
+  () => createAllowlistFilter.value.sortBy === "default",
+);
+const editAllowlistReorderEnabled = computed(
+  () => editAllowlistFilter.value.sortBy === "default",
+);
+
+const allowlistModalityOptions = modelAllowlistModalityOptions;
+const allowlistSortOptions = computed<{ value: ModelAllowlistSortKey; label: string }[]>(() => [
+  { value: "default", label: t("admin.groups.modelAllowlist.sortDefault") },
+  { value: "name", label: t("admin.groups.modelAllowlist.sortName") },
+  { value: "modality", label: t("admin.groups.modelAllowlist.sortModality") },
+  { value: "selected", label: t("admin.groups.modelAllowlist.sortSelected") },
+]);
+
+const toggleCreateAllowlistModality = (modality: string) => {
+  toggleModelAllowlistModality(createAllowlistFilter.value, modality);
+};
+const toggleEditAllowlistModality = (modality: string) => {
+  toggleModelAllowlistModality(editAllowlistFilter.value, modality);
+};
+
+// 全选/取消只作用于筛选结果：分组 14 有 189 个模型，
+// 否则"全选"会连带勾上用户根本没看到的条目。
+const selectAllVisibleCreateModelAllowlistItems = () => {
+  selectAllModelAllowlistItems(
+    createModelAllowlistState,
+    filteredCreateModelAllowlistItems.value.map((item) => item.id),
+  );
+};
+const selectAllVisibleEditModelAllowlistItems = () => {
+  selectAllModelAllowlistItems(
+    editModelAllowlistState,
+    filteredEditModelAllowlistItems.value.map((item) => item.id),
+  );
+};
+const clearVisibleCreateModelAllowlistItems = () => {
+  clearModelAllowlistSelection(
+    createModelAllowlistState,
+    filteredCreateModelAllowlistItems.value.map((item) => item.id),
+  );
+};
+const clearVisibleEditModelAllowlistItems = () => {
+  clearModelAllowlistSelection(
+    editModelAllowlistState,
+    filteredEditModelAllowlistItems.value.map((item) => item.id),
+  );
+};
+
+// 按 id 移动：列表可能被搜索/筛选/排序重排过，不能用渲染序号当真实下标。
+const moveCreateModelAllowlistItem = (modelID: string, delta: -1 | 1) => {
+  moveModelAllowlistItemByID(createModelAllowlistState, modelID, delta);
+};
+const moveEditModelAllowlistItem = (modelID: string, delta: -1 | 1) => {
+  moveModelAllowlistItemByID(editModelAllowlistState, modelID, delta);
+};
+const canMoveCreateModelAllowlistItem = (modelID: string, delta: -1 | 1): boolean =>
+  canMoveModelAllowlistItemByID(createModelAllowlistState, modelID, delta);
+const canMoveEditModelAllowlistItem = (modelID: string, delta: -1 | 1): boolean =>
+  canMoveModelAllowlistItemByID(editModelAllowlistState, modelID, delta);
+
 const createAllowlistCustomEntry = ref("");
 const editAllowlistCustomEntry = ref("");
 const createAllowlistCustomErrorKey = ref<string | null>(null);
@@ -5350,13 +5665,27 @@ const loadModelAllowlistCandidates = async (
   const requestID = modelAllowlistCandidatesTracker.next(request);
   const state = mode === "create" ? createModelAllowlistState : editModelAllowlistState;
   const loadingRef = mode === "create" ? createModelAllowlistLoading : editModelAllowlistLoading;
+  const filterRef = mode === "create" ? createAllowlistFilter : editAllowlistFilter;
+  const modalitiesRef =
+    mode === "create" ? createModelAllowlistModalities : editModelAllowlistModalities;
+  // 每次打开面板都从干净的筛选条件开始，避免上次的搜索词把候选列表藏起来。
+  filterRef.value = createModelAllowlistViewFilter();
   loadingRef.value = true;
   try {
-    const models = await adminAPI.groups.getModelAllowlistCandidates(groupID, platform);
+    const candidates = await adminAPI.groups.getModelAllowlistCandidatesWithCapabilities(
+      groupID,
+      platform,
+    );
     if (!modelAllowlistCandidatesTracker.isCurrent(requestID, request)) {
       return;
     }
-    setModelAllowlistCandidates(state, models);
+    setModelAllowlistCandidates(state, candidates.models);
+    // 能力标签缺失时按纯文本处理（筛选仍可用，只是模态归类退化为 text）。
+    const modalityMap: Record<string, string[]> = {};
+    for (const capability of candidates.capabilities) {
+      modalityMap[capability.model_id] = capability.modalities ?? [];
+    }
+    modalitiesRef.value = modalityMap;
     // 来源账号仅编辑模式可查（新建分组还没有账号）；失败静默，不影响白名单本身
     if (mode === "edit" && groupID > 0) {
       try {
@@ -5404,14 +5733,6 @@ const isRealAutoModel = (modelID: string): boolean =>
 // 此时开启智能路由会让网关接管 auto 请求，真实模型不可达，面板需给出警示。
 const allowlistHasSelectedPlainAuto = (state: typeof createModelAllowlistState): boolean =>
   state.items.some((item) => item.selected && item.id.toLowerCase() === "auto");
-
-const moveCreateModelAllowlistItem = (fromIndex: number, toIndex: number) => {
-  moveModelAllowlistItem(createModelAllowlistState, fromIndex, toIndex);
-};
-
-const moveEditModelAllowlistItem = (fromIndex: number, toIndex: number) => {
-  moveModelAllowlistItem(editModelAllowlistState, fromIndex, toIndex);
-};
 
 // 将 UI 格式的路由规则转换为 API 格式
 const convertRoutingRulesToApiFormat = (

@@ -8,6 +8,7 @@ const {
   listGroups,
   getAllGroups,
   getModelAllowlistCandidates,
+  getModelAllowlistCandidatesWithCapabilities,
   getUsageSummary,
   getCapacitySummary,
   getLiveCapability,
@@ -21,6 +22,7 @@ const {
   listGroups: vi.fn(),
   getAllGroups: vi.fn(),
   getModelAllowlistCandidates: vi.fn(),
+  getModelAllowlistCandidatesWithCapabilities: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
   getLiveCapability: vi.fn(),
@@ -56,6 +58,7 @@ vi.mock('@/api/admin', () => ({
       list: listGroups,
       getAll: getAllGroups,
       getModelAllowlistCandidates,
+      getModelAllowlistCandidatesWithCapabilities,
       getUsageSummary,
       getCapacitySummary,
       getLiveCapability,
@@ -240,6 +243,7 @@ describe('admin GroupsView column settings', () => {
     listGroups.mockReset()
     getAllGroups.mockReset()
     getModelAllowlistCandidates.mockReset()
+    getModelAllowlistCandidatesWithCapabilities.mockReset()
     getUsageSummary.mockReset()
     getCapacitySummary.mockReset()
     getLiveCapability.mockReset()
@@ -259,6 +263,10 @@ describe('admin GroupsView column settings', () => {
     })
     getAllGroups.mockResolvedValue([])
     getModelAllowlistCandidates.mockResolvedValue([])
+    getModelAllowlistCandidatesWithCapabilities.mockResolvedValue({
+      models: [],
+      capabilities: [],
+    })
     getUsageSummary.mockResolvedValue([])
     getCapacitySummary.mockResolvedValue([])
     getLiveCapability.mockResolvedValue({ supported: false })
@@ -271,7 +279,7 @@ describe('admin GroupsView column settings', () => {
     const wrapper = await mountView()
 
     expect(getLiveCapability).not.toHaveBeenCalled()
-    expect(getModelAllowlistCandidates).not.toHaveBeenCalled()
+    expect(getModelAllowlistCandidatesWithCapabilities).not.toHaveBeenCalled()
     expect(getUsageSummary).not.toHaveBeenCalled()
     expect(getCapacitySummary).not.toHaveBeenCalled()
     expect(listGroups).toHaveBeenCalledWith(

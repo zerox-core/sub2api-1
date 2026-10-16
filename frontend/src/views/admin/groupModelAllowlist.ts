@@ -123,10 +123,179 @@ export const toggleModelAllowlistItem = (
   }
 }
 
-export const selectAllModelAllowlistItems = (state: ModelAllowlistState) => {
+// selectAllModelAllowlistItems 全选。
+//
+// 传入 visibleModelIDs 时只作用于可见（筛选后）的条目：分组 14 有 189 个模型，
+// 用户点了搜索或模态筛选之后按"全选"，期望的是选中当前看到的那批，
+// 而不是把 189 个全部勾上。不传参数时保持原有"全选所有条目"行为。
+export const selectAllModelAllowlistItems = (
+  state: ModelAllowlistState,
+  visibleModelIDs?: Iterable<string>,
+) => {
+  const visible = visibleModelIDs ? new Set(visibleModelIDs) : null
   state.items.forEach(item => {
-    item.selected = true
+    if (!visible || visible.has(item.id)) {
+      item.selected = true
+    }
   })
+}
+
+// =====================
+// R7：候选模型的搜索 / 模态筛选 / 排序
+// =====================
+
+export type ModelAllowlistSortKey = 'default' | 'name' | 'modality' | 'selected'
+
+export interface ModelAllowlistViewFilter {
+  /** 模型名包含匹配（大小写不敏感） */
+  query: string
+  /** 模态筛选，多选取「任一命中」；空数组表示不按模态过滤 */
+  modalities: string[]
+  /** 只看已选中 */
+  onlySelected: boolean
+  sortBy: ModelAllowlistSortKey
+}
+
+export const createModelAllowlistViewFilter = (): ModelAllowlistViewFilter => ({
+  query: '',
+  modalities: [],
+  onlySelected: false,
+  sortBy: 'default',
+})
+
+// 模态标签由后端能力目录（R6 model_capability.go）提供；查不到时视为纯文本。
+export type ModelModalitiesLookup = (modelID: string) => string[]
+
+export const modelAllowlistModalityOptions = [
+  'text',
+  'vision',
+  'image',
+  'audio',
+  'video',
+  'embedding',
+] as const
+
+export const matchesModelAllowlistFilter = (
+  item: ModelAllowlistItem,
+  filter: ModelAllowlistViewFilter,
+  modalitiesOf?: ModelModalitiesLookup,
+): boolean => {
+  const query = filter.query.trim().toLowerCase()
+  if (query && !item.id.toLowerCase().includes(query)) {
+    return false
+  }
+  if (filter.onlySelected && !item.selected) {
+    return false
+  }
+  if (filter.modalities.length > 0) {
+    const labels = modalitiesOf ? modalitiesOf(item.id) : []
+    if (!filter.modalities.some(modality => labels.includes(modality))) {
+      return false
+    }
+  }
+  return true
+}
+
+export const sortModelAllowlistItems = (
+  items: ModelAllowlistItem[],
+  sortBy: ModelAllowlistSortKey,
+  modalitiesOf?: ModelModalitiesLookup,
+): ModelAllowlistItem[] => {
+  if (sortBy === 'default') {
+    return items
+  }
+  const compareName = (a: ModelAllowlistItem, b: ModelAllowlistItem) =>
+    a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' })
+  const copy = [...items]
+  if (sortBy === 'name') {
+    copy.sort(compareName)
+    return copy
+  }
+  if (sortBy === 'selected') {
+    copy.sort((a, b) => Number(b.selected) - Number(a.selected) || compareName(a, b))
+    return copy
+  }
+  // modality：按首个模态分组，组内按名称
+  const primaryModality = (modelID: string): string =>
+    modalitiesOf ? (modalitiesOf(modelID)[0] ?? '') : ''
+  copy.sort(
+    (a, b) =>
+      primaryModality(a.id).localeCompare(primaryModality(b.id)) || compareName(a, b),
+  )
+  return copy
+}
+
+// filterModelAllowlistItems 返回当前视图中可见（并按需重排）的条目。
+export const filterModelAllowlistItems = (
+  state: ModelAllowlistState,
+  filter: ModelAllowlistViewFilter,
+  modalitiesOf?: ModelModalitiesLookup,
+): ModelAllowlistItem[] =>
+  sortModelAllowlistItems(
+    state.items.filter(item => matchesModelAllowlistFilter(item, filter, modalitiesOf)),
+    filter.sortBy,
+    modalitiesOf,
+  )
+
+// toggleModelAllowlistModality 切换某个模态筛选标签。
+export const toggleModelAllowlistModality = (
+  filter: ModelAllowlistViewFilter,
+  modality: string,
+) => {
+  const index = filter.modalities.indexOf(modality)
+  if (index >= 0) {
+    filter.modalities.splice(index, 1)
+  } else {
+    filter.modalities.push(modality)
+  }
+}
+
+// clearModelAllowlistSelection 取消选中；传入 visibleModelIDs 时只清可见条目。
+export const clearModelAllowlistSelection = (
+  state: ModelAllowlistState,
+  visibleModelIDs?: Iterable<string>,
+) => {
+  const visible = visibleModelIDs ? new Set(visibleModelIDs) : null
+  state.items.forEach(item => {
+    if (!visible || visible.has(item.id)) {
+      item.selected = false
+    }
+  })
+}
+
+// moveModelAllowlistItemByID 按条目 id 移动一步（delta = -1 上移 / +1 下移）。
+//
+// 视图可能被搜索、模态筛选或排序重排过，渲染序号不再等于 state.items 的下标，
+// 因此上移/下移必须按 id 定位；移动成功后返回 true。
+export const moveModelAllowlistItemByID = (
+  state: ModelAllowlistState,
+  modelID: string,
+  delta: -1 | 1,
+): boolean => {
+  const fromIndex = state.items.findIndex(item => item.id === modelID)
+  if (fromIndex < 0) {
+    return false
+  }
+  const toIndex = fromIndex + delta
+  if (toIndex < 0 || toIndex >= state.items.length) {
+    return false
+  }
+  const [item] = state.items.splice(fromIndex, 1)
+  state.items.splice(toIndex, 0, item)
+  return true
+}
+
+export const canMoveModelAllowlistItemByID = (
+  state: ModelAllowlistState,
+  modelID: string,
+  delta: -1 | 1,
+): boolean => {
+  const fromIndex = state.items.findIndex(item => item.id === modelID)
+  if (fromIndex < 0) {
+    return false
+  }
+  const toIndex = fromIndex + delta
+  return toIndex >= 0 && toIndex < state.items.length
 }
 
 export const invertModelAllowlistSelection = (state: ModelAllowlistState) => {

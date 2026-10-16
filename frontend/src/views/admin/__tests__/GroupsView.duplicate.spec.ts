@@ -11,6 +11,7 @@ const {
   duplicateGroup,
   updateGroup,
   getModelAllowlistCandidates,
+  getModelAllowlistCandidatesWithCapabilities,
   getUsageSummary,
   getCapacitySummary,
   getLiveCapability,
@@ -21,6 +22,7 @@ const {
   duplicateGroup: vi.fn(),
   updateGroup: vi.fn(),
   getModelAllowlistCandidates: vi.fn(),
+  getModelAllowlistCandidatesWithCapabilities: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
   getLiveCapability: vi.fn(),
@@ -36,6 +38,7 @@ vi.mock('@/api/admin', () => ({
       list: listGroups,
       duplicate: duplicateGroup,
       getModelAllowlistCandidates,
+      getModelAllowlistCandidatesWithCapabilities,
       getUsageSummary,
       getCapacitySummary,
       getLiveCapability,
@@ -185,6 +188,7 @@ describe('GroupsView duplicate action', () => {
       duplicateGroup,
       updateGroup,
       getModelAllowlistCandidates,
+      getModelAllowlistCandidatesWithCapabilities,
       getUsageSummary,
       getCapacitySummary,
       getLiveCapability,
@@ -208,6 +212,10 @@ describe('GroupsView duplicate action', () => {
       status: 'inactive'
     })
     getModelAllowlistCandidates.mockResolvedValue([])
+    getModelAllowlistCandidatesWithCapabilities.mockResolvedValue({
+      models: [],
+      capabilities: []
+    })
     getUsageSummary.mockResolvedValue([])
     getCapacitySummary.mockResolvedValue([])
     getLiveCapability.mockResolvedValue({ supported: false })

@@ -546,3 +546,47 @@ mappedModel := s.getMappedModelForThinkingLevel(
 #### 遗留
 
 管理端 UI 尚未渲染该清单（数据已随账号详情返回，清除端点已就绪）。
+
+### 2026-10-16 P6：R7 分组选模型面板（搜索 / 模态筛选 / 排序）
+
+原始抱怨之一：分组 14 有 **189 个模型**，面板只能靠肉眼翻；"思考能力只能靠换不同 id"
+这件事在面板上完全看不出来。
+
+#### 设计
+
+1. **能力标签单一事实源**：`GET /admin/groups/:id/model-allowlist-candidates` 在原
+   `models` 之外新增 `capabilities`（`service.ModelCapability`：`base_model` /
+   `modalities` / `reasoning` / `thinking_level`）与 `by_modality` 索引。
+   判定复用 R6 的 `service.model_capability.go` —— 面板上的「图像 / 音频」标签与网关
+   真实能力判定是同一份逻辑，不会出现前后端两套正则。
+2. **前端纯逻辑**（`groupModelAllowlist.ts`）：新增
+   `ModelAllowlistViewFilter{query, modalities, onlySelected, sortBy}`、
+   `filterModelAllowlistItems`、`sortModelAllowlistItems`（default / name / modality /
+   selected；名称用 `localeCompare{numeric:true}`，避免 `gpt-5.10` 排在 `gpt-5.2` 前面）、
+   `toggleModelAllowlistModality`、`clearModelAllowlistSelection`。
+3. **范围全选**：`selectAllModelAllowlistItems(state, visibleModelIDs?)` 增加可选可见集合
+   —— 分组 14 的「全选」现在只作用于**筛选结果**；不传参数保持原行为（向后兼容）。
+4. **按 id 移动**：列表会被搜索/筛选/排序重排，渲染序号不再等于 `state.items` 下标，
+   因此新增 `moveModelAllowlistItemByID` / `canMoveModelAllowlistItemByID`，并在
+   **排序状态下禁用上移/下移**（悬停提示切回「默认顺序」），避免按钮和条目对不上。
+5. **UI**：创建与编辑两个面板各加一行筛选栏（搜索框、排序下拉、只看已选）与一行模态
+   chips + 可见数量统计 + 「全选筛选结果 / 取消选择」；模型行尾部渲染模态标签；
+   筛不出结果时显示专门空态，而不是误导性的「暂无候选模型」。
+
+#### ✅ 验证
+
+| 项目 | 结果 |
+| --- | --- |
+| 前端单测 | `groupModelAllowlist.spec.ts` 19 个 + `groupModelAllowlistFilter.spec.ts` 9 个全过 |
+| 后端 handler 测试 | `TestGroupModelAllowlistCandidatesIncludesCapabilities` 通过（真 gin 路由，断言 `models` / `capabilities` / `by_modality`） |
+| 既有 spec | GroupsView duplicate / codexManifest / columnSettings 共 18 个用例通过（mock 已指向新 API 名） |
+| 类型与 i18n | `vue-tsc --noEmit` 干净；`localeKeyCompleteness` 3 个用例通过 |
+| 镜像产物 | `r7-20261016` 二进制内含 `by_modality` 与新增中英文字符串；容器 healthy；`/` HTTP 200、`/v1/models` HTTP 200（无回归）；未授权访问 admin 端点仍 401 |
+
+> UI 框架：面板沿用项目既有 Tailwind v3 + 自有 Vue 组件（`Toggle` / `Icon` / `input-label`），
+> **未引入 daisyUI** —— daisyUI 5 硬依赖 Tailwind v4，且本项目已有成型设计系统。
+
+#### 遗留
+
+面板尚未直接展示 R5 的账号层「上游不支持」清单，也还没有「一键按模态筛选候选」入口
+（R6 的 `ModelCapabilityFilter` 已就绪，接上去即可）。

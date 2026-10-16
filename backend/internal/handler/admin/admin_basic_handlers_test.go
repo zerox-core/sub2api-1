@@ -9,6 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
 func setupAdminRouter() (*gin.Engine, *stubAdminService) {
@@ -370,4 +372,32 @@ func TestRedeemHandlerEndpoints(t *testing.T) {
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/redeem-codes/5/stats", nil)
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
+}
+
+// R7：分组候选模型接口顺带返回模态能力标签与模态索引，供选模型面板筛选。
+// 这样"在面板上按图像筛选"和网关真实能力判定用的是同一份逻辑（service.model_capability.go），
+// 前后端不会各写一套正则，也不用多一次往返。
+func TestGroupModelAllowlistCandidatesIncludesCapabilities(t *testing.T) {
+	router, _ := setupAdminRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/groups/0/model-allowlist-candidates?platform=openai", nil)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var body struct {
+		Data struct {
+			Models       []string                  `json:"models"`
+			Capabilities []service.ModelCapability `json:"capabilities"`
+			ByModality   map[string][]string       `json:"by_modality"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	require.Equal(t, []string{"gpt-5.5", "gpt-5.4"}, body.Data.Models)
+	require.Len(t, body.Data.Capabilities, 2)
+	require.Equal(t, "gpt-5.5", body.Data.Capabilities[0].ModelID)
+	require.Equal(t, "gpt-5.5", body.Data.Capabilities[0].BaseModel)
+	require.Contains(t, body.Data.Capabilities[0].Modalities, service.ModelModalityText)
+	require.Contains(t, body.Data.ByModality[service.ModelModalityText], "gpt-5.5")
 }

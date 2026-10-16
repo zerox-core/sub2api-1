@@ -9,12 +9,14 @@ import GroupsView from "@/views/admin/GroupsView.vue";
 const {
   listGroups,
   getModelAllowlistCandidates,
+  getModelAllowlistCandidatesWithCapabilities,
   getUsageSummary,
   getCapacitySummary,
   getLiveCapability,
 } = vi.hoisted(() => ({
   listGroups: vi.fn(),
   getModelAllowlistCandidates: vi.fn(),
+  getModelAllowlistCandidatesWithCapabilities: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
   getLiveCapability: vi.fn(),
@@ -26,6 +28,7 @@ vi.mock("@/api/admin", () => ({
       list: listGroups,
       getAll: vi.fn(),
       getModelAllowlistCandidates,
+      getModelAllowlistCandidatesWithCapabilities,
       getUsageSummary,
       getCapacitySummary,
       getLiveCapability,
@@ -233,6 +236,7 @@ describe("GroupsView Codex manifest binding", () => {
     localStorage.clear();
     listGroups.mockReset();
     getModelAllowlistCandidates.mockReset();
+    getModelAllowlistCandidatesWithCapabilities.mockReset();
     getUsageSummary.mockReset();
     getCapacitySummary.mockReset();
     getLiveCapability.mockReset();
@@ -245,6 +249,10 @@ describe("GroupsView Codex manifest binding", () => {
       pages: 1,
     });
     getModelAllowlistCandidates.mockResolvedValue([]);
+    getModelAllowlistCandidatesWithCapabilities.mockResolvedValue({
+      models: [],
+      capabilities: [],
+    });
     getUsageSummary.mockResolvedValue([]);
     getCapacitySummary.mockResolvedValue([]);
     getLiveCapability.mockResolvedValue({ supported: false });
