@@ -1,3 +1,5 @@
+import { classifyModelType, type ModelDisplayType } from '@/utils/modelType'
+
 export interface ModelAllowlistConfig {
   enabled: boolean
   models: string[]
@@ -161,6 +163,10 @@ export interface ModelAllowlistViewFilter {
   query: string
   /** 模态筛选，多选取「任一命中」；空数组表示不按模态过滤 */
   modalities: string[]
+  /** 功能归类筛选（大语言/视觉/生图/语音/视频），空表示不限。仅管理端分组配置使用。 */
+  type: ModelDisplayType | ''
+  /** 来源账号筛选（按账号名包含匹配），空表示不限账号。仅管理端分组配置使用。 */
+  sourceAccount: string
   /** 只看已选中 */
   onlySelected: boolean
   sortBy: ModelAllowlistSortKey
@@ -169,12 +175,16 @@ export interface ModelAllowlistViewFilter {
 export const createModelAllowlistViewFilter = (): ModelAllowlistViewFilter => ({
   query: '',
   modalities: [],
+  type: '',
+  sourceAccount: '',
   onlySelected: false,
   sortBy: 'default',
 })
 
 // 模态标签由后端能力目录（R6 model_capability.go）提供；查不到时视为纯文本。
 export type ModelModalitiesLookup = (modelID: string) => string[]
+/** 模型名 → 声明该模型的来源账号名列表；仅管理端分组配置使用。 */
+export type ModelSourceAccountsLookup = (modelID: string) => string[]
 
 export const modelAllowlistModalityOptions = [
   'text',
@@ -189,6 +199,7 @@ export const matchesModelAllowlistFilter = (
   item: ModelAllowlistItem,
   filter: ModelAllowlistViewFilter,
   modalitiesOf?: ModelModalitiesLookup,
+  sourcesOf?: ModelSourceAccountsLookup,
 ): boolean => {
   const query = filter.query.trim().toLowerCase()
   if (query && !item.id.toLowerCase().includes(query)) {
@@ -200,6 +211,15 @@ export const matchesModelAllowlistFilter = (
   if (filter.modalities.length > 0) {
     const labels = modalitiesOf ? modalitiesOf(item.id) : []
     if (!filter.modalities.some(modality => labels.includes(modality))) {
+      return false
+    }
+  }
+  if (filter.type && classifyModelType(item.id) !== filter.type) {
+    return false
+  }
+  if (filter.sourceAccount) {
+    const accounts = sourcesOf ? sourcesOf(item.id) : []
+    if (!accounts.includes(filter.sourceAccount)) {
       return false
     }
   }
@@ -240,9 +260,10 @@ export const filterModelAllowlistItems = (
   state: ModelAllowlistState,
   filter: ModelAllowlistViewFilter,
   modalitiesOf?: ModelModalitiesLookup,
+  sourcesOf?: ModelSourceAccountsLookup,
 ): ModelAllowlistItem[] =>
   sortModelAllowlistItems(
-    state.items.filter(item => matchesModelAllowlistFilter(item, filter, modalitiesOf)),
+    state.items.filter(item => matchesModelAllowlistFilter(item, filter, modalitiesOf, sourcesOf)),
     filter.sortBy,
     modalitiesOf,
   )

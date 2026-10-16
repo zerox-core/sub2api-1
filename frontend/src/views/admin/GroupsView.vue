@@ -443,6 +443,16 @@
                 }}</span>
               </button>
               <button
+                v-if="!authStore.isSimpleMode"
+                data-testid="group-view-models"
+                :title="t('admin.groups.viewModelsTooltip')"
+                @click="handleViewModels(row)"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-green-600 dark:hover:bg-dark-700 dark:hover:text-green-400"
+              >
+                <Icon name="document" size="sm" />
+                <span class="text-xs">{{ t("admin.groups.viewModels") }}</span>
+              </button>
+              <button
                 @click="handleDelete(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
               >
@@ -890,6 +900,41 @@
                 @click="createAllowlistFilter.onlySelected = !createAllowlistFilter.onlySelected"
               >
                 {{ t("admin.groups.modelAllowlist.onlySelected") }}
+              </button>
+            </div>
+            <!-- 类型归类筛选（新建分组）：与编辑面板同一套分类逻辑。
+                 新建时还没有分组 ID，查不到来源账号，所以这里只有类型维度。 -->
+            <div
+              class="flex flex-wrap items-center gap-1.5 border-b border-gray-200 bg-gray-50/60 px-3 py-2 dark:border-dark-600 dark:bg-dark-800/60"
+            >
+              <span class="mr-1 text-[11px] text-gray-500 dark:text-gray-400">
+                {{ t("admin.groups.modelAllowlist.typeFilter") }}
+              </span>
+              <button
+                type="button"
+                class="rounded px-2 py-0.5 text-[11px] font-medium transition-colors"
+                :class="
+                  createAllowlistFilter.type === ''
+                    ? 'bg-primary-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-300 dark:hover:bg-dark-600'
+                "
+                @click="createAllowlistFilter.type = ''"
+              >
+                {{ t("admin.groups.modelAllowlist.typeAll") }}
+              </button>
+              <button
+                v-for="option in allowlistTypeOptions"
+                :key="option.value"
+                type="button"
+                class="rounded px-2 py-0.5 text-[11px] font-medium transition-colors"
+                :class="
+                  createAllowlistFilter.type === option.value
+                    ? 'bg-primary-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-300 dark:hover:bg-dark-600'
+                "
+                @click="createAllowlistFilter.type = createAllowlistFilter.type === option.value ? '' : option.value"
+              >
+                {{ option.label }}
               </button>
             </div>
             <div
@@ -2726,6 +2771,59 @@
                 @click="editAllowlistFilter.onlySelected = !editAllowlistFilter.onlySelected"
               >
                 {{ t("admin.groups.modelAllowlist.onlySelected") }}
+              </button>
+              <!-- 来源账号筛选：仅管理端可见，用于定位"这个模型是哪个账号提供的"。
+                   用户侧列表不下发来源账号，避免泄漏上游账号信息。 -->
+              <select
+                v-if="editModelAllowlistAccountOptions.length > 0"
+                v-model="editAllowlistFilter.sourceAccount"
+                class="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 focus:border-primary-500 focus:outline-none dark:border-dark-500 dark:bg-dark-700 dark:text-gray-200"
+              >
+                <option value="">
+                  {{ t("admin.groups.modelAllowlist.sourceAccountAll") }}
+                </option>
+                <option
+                  v-for="account in editModelAllowlistAccountOptions"
+                  :key="account.id"
+                  :value="account.value"
+                >
+                  {{ account.name }}#{{ account.id }}
+                </option>
+              </select>
+            </div>
+            <!-- 类型归类筛选：大语言 / 视觉 / 生图 / 语音 / 视频。
+                 走 @/utils/modelType 的同一份分类逻辑，和用户端 Key 弹窗完全一致。 -->
+            <div
+              class="flex flex-wrap items-center gap-1.5 border-b border-gray-200 bg-gray-50/60 px-3 py-2 dark:border-dark-600 dark:bg-dark-800/60"
+            >
+              <span class="mr-1 text-[11px] text-gray-500 dark:text-gray-400">
+                {{ t("admin.groups.modelAllowlist.typeFilter") }}
+              </span>
+              <button
+                type="button"
+                class="rounded px-2 py-0.5 text-[11px] font-medium transition-colors"
+                :class="
+                  editAllowlistFilter.type === ''
+                    ? 'bg-primary-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-300 dark:hover:bg-dark-600'
+                "
+                @click="editAllowlistFilter.type = ''"
+              >
+                {{ t("admin.groups.modelAllowlist.typeAll") }}
+              </button>
+              <button
+                v-for="option in allowlistTypeOptions"
+                :key="option.value"
+                type="button"
+                class="rounded px-2 py-0.5 text-[11px] font-medium transition-colors"
+                :class="
+                  editAllowlistFilter.type === option.value
+                    ? 'bg-primary-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-300 dark:hover:bg-dark-600'
+                "
+                @click="editAllowlistFilter.type = editAllowlistFilter.type === option.value ? '' : option.value"
+              >
+                {{ option.label }}
               </button>
             </div>
             <div
@@ -4675,6 +4773,13 @@
       @close="showRPMOverridesModal = false"
       @success="loadGroups"
     />
+
+    <!-- Group Models Modal：展示该分组真实可调用的模型（按类型筛选，不展示来源账号） -->
+    <GroupModelsModal
+      :show="showModelsModal"
+      :group="modelsModalGroup"
+      @close="showModelsModal = false"
+    />
   </AppLayout>
 </template>
 
@@ -4713,9 +4818,11 @@ import EmptyState from "@/components/common/EmptyState.vue";
 import Select from "@/components/common/Select.vue";
 import PlatformIcon from "@/components/common/PlatformIcon.vue";
 import { platformLabel } from "@/utils/platformColors";
+import { MODEL_TYPE_LABELS, type ModelDisplayType } from "@/utils/modelType";
 import Icon from "@/components/icons/Icon.vue";
 import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipliersModal.vue";
 import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesModal.vue";
+import GroupModelsModal from "@/components/admin/group/GroupModelsModal.vue";
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffortPolicyFields.vue";
 import CodexManifestAccountsField from "@/components/admin/group/CodexManifestAccountsField.vue";
@@ -5270,6 +5377,8 @@ const showRateMultipliersModal = ref(false);
 const rateMultipliersGroup = ref<AdminGroup | null>(null);
 const showRPMOverridesModal = ref(false);
 const rpmOverridesGroup = ref<AdminGroup | null>(null);
+const showModelsModal = ref(false);
+const modelsModalGroup = ref<AdminGroup | null>(null);
 const sortableGroups = ref<AdminGroup[]>([]);
 type ConcreteGroupPlatform = Exclude<GroupPlatform, "composite">;
 type CompositeRouteFormState = {
@@ -5351,6 +5460,36 @@ const createModelAllowlistModalityOf = (modelID: string): string[] =>
 const editModelAllowlistModalityOf = (modelID: string): string[] =>
   editModelAllowlistModalities.value[modelID] ?? ["text"];
 
+// 来源账号查找：按模型 ID 在「来源账号」映射里找出所有声明该模型的账号名，
+// 用于管理端按账号筛选候选模型。用户端拿不到也绝不下发这份数据。
+// 只有编辑模式能查来源账号：新建分组时还没有分组 ID，/model-allowlist-sources 无从查询。
+const editModelAllowlistSourcesOf = (modelID: string): string[] => {
+  const entry = Object.entries(editModelAllowlistSources.value.sources).find(
+    ([model]) => model.toLowerCase() === modelID.toLowerCase(),
+  );
+  if (!entry) return [];
+  return entry[1].map((account) => `${account.name}#${account.id}`);
+};
+
+// 分组内可参与筛选的来源账号清单（去重后按 id 排序）。
+const modelAllowlistAccountOptions = (
+  sources: ModelAllowlistSources,
+): { id: number; name: string; value: string }[] => {
+  const map = new Map<number, { id: number; name: string; value: string }>();
+  for (const accounts of Object.values(sources.sources)) {
+    for (const account of accounts) {
+      const value = `${account.name}#${account.id}`;
+      if (!map.has(account.id)) {
+        map.set(account.id, { id: account.id, name: account.name, value });
+      }
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => a.id - b.id);
+};
+const editModelAllowlistAccountOptions = computed(() =>
+  modelAllowlistAccountOptions(editModelAllowlistSources.value),
+);
+
 const filteredCreateModelAllowlistItems = computed(() =>
   filterModelAllowlistItems(
     createModelAllowlistState,
@@ -5363,6 +5502,7 @@ const filteredEditModelAllowlistItems = computed(() =>
     editModelAllowlistState,
     editAllowlistFilter.value,
     editModelAllowlistModalityOf,
+    editModelAllowlistSourcesOf,
   ),
 );
 
@@ -5375,6 +5515,14 @@ const editAllowlistReorderEnabled = computed(
 );
 
 const allowlistModalityOptions = modelAllowlistModalityOptions;
+// 类型归类筛选项：顺序与用户端 Key 弹窗一致（大语言 / 视觉 / 生图 / 语音 / 视频）。
+const allowlistTypeOptions = computed<{ value: ModelDisplayType; label: string }[]>(() => [
+  { value: "text", label: `🧠 ${MODEL_TYPE_LABELS.text}` },
+  { value: "vision", label: `👁️ ${MODEL_TYPE_LABELS.vision}` },
+  { value: "image", label: `🎨 ${MODEL_TYPE_LABELS.image}` },
+  { value: "audio", label: `🎙️ ${MODEL_TYPE_LABELS.audio}` },
+  { value: "video", label: `🎬 ${MODEL_TYPE_LABELS.video}` },
+]);
 const allowlistSortOptions = computed<{ value: ModelAllowlistSortKey; label: string }[]>(() => [
   { value: "default", label: t("admin.groups.modelAllowlist.sortDefault") },
   { value: "name", label: t("admin.groups.modelAllowlist.sortName") },
@@ -7014,6 +7162,12 @@ const handleRateMultipliers = (group: AdminGroup) => {
 const handleRPMOverrides = (group: AdminGroup) => {
   rpmOverridesGroup.value = group;
   showRPMOverridesModal.value = true;
+};
+
+// 查看分组真实可调用的模型（只展示模型名与类型，不展示来源账号）
+const handleViewModels = (group: AdminGroup) => {
+  modelsModalGroup.value = group;
+  showModelsModal.value = true;
 };
 
 const handleDuplicate = async (group: AdminGroup) => {
