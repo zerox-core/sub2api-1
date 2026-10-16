@@ -2,6 +2,10 @@
   <div class="min-h-screen bg-gray-50 dark:bg-dark-950">
     <!-- Background Decoration -->
     <div class="pointer-events-none fixed inset-0 bg-mesh-gradient"></div>
+    <!-- 纯白星空背景（深色模式下提供沉浸式宇宙质感，低透明度不干扰主要功能） -->
+    <div class="hidden dark:block pointer-events-none fixed inset-0 opacity-25">
+      <CosmicBackground />
+    </div>
 
     <!-- Sidebar -->
     <AppSidebar />
@@ -31,6 +35,7 @@ import { useOnboardingTour } from '@/composables/useOnboardingTour'
 import { useOnboardingStore } from '@/stores/onboarding'
 import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
+import CosmicBackground from '@/components/common/CosmicBackground.vue'
 
 const appStore = useAppStore()
 const authStore = useAuthStore()

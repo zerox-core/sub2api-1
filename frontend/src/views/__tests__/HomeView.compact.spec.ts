@@ -50,6 +50,10 @@ function mountHome(settings: Record<string, unknown> = {}) {
         RouterLink: RouterLinkStub,
         LocaleSwitcher: { template: '<div data-testid="locale-switcher" />' },
         Icon: { template: '<span data-testid="icon" />' },
+        // 默认首页（Cosmic）拆成了独立组件；测试只关心页面结构选择，组件内部实现不参与断言。
+        CosmicBackground: { template: '<div data-testid="cosmic-background" />' },
+        QuickstartTerminal: { template: '<div data-testid="quickstart-terminal" />' },
+        VendorCards: { template: '<div data-testid="vendor-cards" />' },
       },
     },
   })
@@ -108,7 +112,8 @@ describe('HomeView compact mode', () => {
     const wrapper = mountHome(settings)
 
     expect(wrapper.find('[data-testid="compact-home"]').exists()).toBe(false)
-    expect(wrapper.find('.terminal-container').exists()).toBe(true)
+    // 默认首页是 Cosmic 版：终端区块已抽成 QuickstartTerminal 组件
+    expect(wrapper.find('[data-testid="quickstart-terminal"]').exists()).toBe(true)
   })
 
   it('links unauthenticated visitors to login', () => {

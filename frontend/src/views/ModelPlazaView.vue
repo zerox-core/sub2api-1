@@ -4,12 +4,17 @@
     <ModelPlazaContent :response="data" :loading="loading" :error="loadFailed" embedded />
   </AppLayout>
 
-  <!-- 独立形态:自带导航条(logo/站名 + 登录/回后台) -->
-  <div v-else class="min-h-screen bg-gray-50 dark:bg-dark-950">
-    <PlazaNavBar />
-    <main class="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-      <ModelPlazaContent :response="data" :loading="loading" :error="loadFailed" />
-    </main>
+  <!-- 独立形态:自带导航条(logo/站名 + 登录/回后台) + 纯白宇宙星空深色底 -->
+  <div v-else class="relative min-h-screen bg-[#07080C] text-zinc-100 overflow-hidden">
+    <!-- 纯白星空背景 (杜绝蓝紫色) -->
+    <CosmicBackground />
+
+    <div class="relative z-10 flex flex-col min-h-screen">
+      <PlazaNavBar />
+      <main class="mx-auto max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8 w-full">
+        <ModelPlazaContent :response="data" :loading="loading" :error="loadFailed" />
+      </main>
+    </div>
   </div>
 </template>
 
@@ -19,6 +24,7 @@ import { useRoute } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import PlazaNavBar from '@/components/modelPlaza/PlazaNavBar.vue'
 import ModelPlazaContent from '@/components/modelPlaza/ModelPlazaContent.vue'
+import CosmicBackground from '@/components/common/CosmicBackground.vue'
 import { getModelPlaza, type ModelPlazaResponse } from '@/api/modelPlaza'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'

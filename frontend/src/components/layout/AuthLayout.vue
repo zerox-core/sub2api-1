@@ -1,62 +1,46 @@
 <template>
-  <div class="relative flex min-h-screen items-center justify-center overflow-hidden p-4">
-    <!-- Background -->
-    <div
-      class="absolute inset-0 bg-gradient-to-br from-gray-50 via-primary-50/30 to-gray-100 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950"
-    ></div>
-
-    <!-- Decorative Elements -->
-    <div class="pointer-events-none absolute inset-0 overflow-hidden">
-      <!-- Gradient Orbs -->
-      <div
-        class="absolute -right-40 -top-40 h-80 w-80 rounded-full bg-primary-400/20 blur-3xl"
-      ></div>
-      <div
-        class="absolute -bottom-40 -left-40 h-80 w-80 rounded-full bg-primary-500/15 blur-3xl"
-      ></div>
-      <div
-        class="absolute left-1/2 top-1/2 h-96 w-96 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary-300/10 blur-3xl"
-      ></div>
-
-      <!-- Grid Pattern -->
-      <div
-        class="absolute inset-0 bg-[linear-gradient(rgba(20,184,166,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(20,184,166,0.03)_1px,transparent_1px)] bg-[size:64px_64px]"
-      ></div>
-    </div>
+  <div class="relative flex min-h-screen items-center justify-center overflow-hidden p-4 bg-[#07080C] text-zinc-100">
+    <!-- 宇宙星空深色背景（纯白微光点，呼吸微闪，杜绝蓝紫色） -->
+    <CosmicBackground />
 
     <!-- Content Container -->
     <div class="relative z-10 w-full max-w-md">
       <!-- Logo/Brand -->
       <div class="mb-8 text-center">
-        <!-- Custom Logo or Default Logo -->
-        <template v-if="settingsLoaded">
-          <div
-            class="mb-4 inline-flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl shadow-lg shadow-primary-500/30"
-          >
-            <img :src="siteLogo || '/logo.svg'" alt="Logo" class="h-full w-full object-contain" />
+        <!-- Z-Prism 现代极客折线几何 Logo -->
+        <div class="mb-4 inline-flex items-center justify-center">
+          <div class="relative flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-500/25 to-orange-600/15 border border-primary-500/40 shadow-inner">
+            <svg class="h-7 w-7 text-primary-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            <div class="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-primary-400 animate-pulse"></div>
           </div>
-          <h1 class="text-gradient mb-2 text-3xl font-bold">
-            {{ siteName }}
-          </h1>
-          <p class="text-sm text-gray-500 dark:text-dark-400">
-            {{ siteSubtitle }}
-          </p>
-        </template>
+        </div>
+
+        <h1 class="text-2xl font-black tracking-tight text-white flex items-center justify-center gap-2">
+          <span>sub2api</span>
+          <span class="rounded border border-primary-500/40 bg-primary-500/10 px-1.5 py-0.5 text-xs font-mono font-semibold text-primary-300">
+            ZeroX Core
+          </span>
+        </h1>
+        <p class="mt-1 text-xs text-zinc-400 font-mono">
+          {{ siteSubtitle }}
+        </p>
       </div>
 
-      <!-- Card Container -->
-      <div class="card-glass rounded-2xl p-8 shadow-glass">
+      <!-- Card Container - 黑曜石晶体微透卡片 -->
+      <div class="rounded-2xl border border-white/[0.09] bg-[#0E1118]/85 p-7 shadow-2xl backdrop-blur-xl">
         <slot />
       </div>
 
       <!-- Footer Links -->
-      <div class="mt-6 text-center text-sm">
+      <div class="mt-6 text-center text-sm text-zinc-400">
         <slot name="footer" />
       </div>
 
       <!-- Copyright -->
-      <div class="mt-8 text-center text-xs text-gray-400 dark:text-dark-500">
-        &copy; {{ currentYear }} {{ siteName }}. All rights reserved.
+      <div class="mt-8 text-center text-xs text-zinc-500 font-mono">
+        &copy; {{ currentYear }} sub2api. All rights reserved.
       </div>
     </div>
   </div>
@@ -65,24 +49,16 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useAppStore } from '@/stores'
-import { sanitizeUrl } from '@/utils/url'
+import CosmicBackground from '@/components/common/CosmicBackground.vue'
 
 const appStore = useAppStore()
 
-const siteName = computed(() => appStore.siteName || 'Sub2API')
-const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
-const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'Subscription to API Conversion Platform')
-const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
-
+const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'AI API Gateway & Multiplexing Infrastructure')
 const currentYear = computed(() => new Date().getFullYear())
 
 onMounted(() => {
-  appStore.fetchPublicSettings()
+  if (!appStore.publicSettingsLoaded) {
+    appStore.fetchPublicSettings()
+  }
 })
 </script>
-
-<style scoped>
-.text-gradient {
-  @apply bg-gradient-to-r from-primary-600 to-primary-500 bg-clip-text text-transparent;
-}
-</style>
