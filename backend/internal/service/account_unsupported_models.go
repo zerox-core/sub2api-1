@@ -48,6 +48,12 @@ func normalizeUnsupportedModelKey(model string) string {
 	return strings.TrimSpace(name)
 }
 
+// NormalizeUnsupportedModelName 暴露归一化结果，供管理端按模型名放行单条记录时
+// 用它对齐清单键（清单键一律是归一化后的名字）。
+func NormalizeUnsupportedModelName(model string) string {
+	return normalizeUnsupportedModelKey(model)
+}
+
 // UnsupportedModelRecords 解析账号上的不支持模型清单（无记录时返回 nil）。
 func (a *Account) UnsupportedModelRecords() AccountUnsupportedModels {
 	if a == nil || a.Extra == nil {

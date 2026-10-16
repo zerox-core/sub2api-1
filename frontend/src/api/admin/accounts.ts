@@ -411,6 +411,20 @@ export async function clearRateLimit(id: number): Promise<Account> {
 }
 
 /**
+ * Release models the upstream explicitly rejected (R5 passive-learning list).
+ * @param id - Account ID
+ * @param model - Omit to release every recorded model
+ * @returns Updated account
+ */
+export async function clearUnsupportedModels(id: number, model?: string): Promise<Account> {
+  const { data } = await apiClient.delete<Account>(
+    `/admin/accounts/${id}/unsupported-models`,
+    model ? { params: { model } } : undefined
+  )
+  return data
+}
+
+/**
  * Recover account runtime state in one call
  * @param id - Account ID
  * @returns Updated account
@@ -1182,6 +1196,7 @@ export const accountsAPI = {
   getTodayStats,
   getBatchTodayStats,
   clearRateLimit,
+  clearUnsupportedModels,
   recoverState,
   resetAccountQuota,
   getTempUnschedulableStatus,

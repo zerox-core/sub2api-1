@@ -1,6 +1,10 @@
 export interface ModelAllowlistConfig {
   enabled: boolean
   models: string[]
+  /** R6：分组级按模型功能过滤（空 = 不限制），多个模态取并集 */
+  modalities?: string[]
+  /** R6：不单独放行用换 id 表达挡位的变体 */
+  exclude_thinking_variants?: boolean
 }
 
 export interface ModelAllowlistItem {
@@ -44,6 +48,10 @@ export interface ModelAllowlistState {
   // 由 buildModelAllowlistConfig 在提交时按需注入到模型列表首位。
   autoEnabled: boolean
   autoStrategy: ModelAllowlistAutoStrategy
+  // R6：分组级「按模型功能过滤」。与上面的白名单条目是两个独立维度（AND 叠加）：
+  // 白名单回答"暴露哪些模型"，这里回答"这个分组要不要图像/语音模型"。
+  modalities: string[]
+  excludeThinkingVariants: boolean
   savedModels: string[]
   items: ModelAllowlistItem[]
 }
@@ -59,6 +67,8 @@ export const createModelAllowlistState = (
     enabled: config?.enabled ?? false,
     autoEnabled: false,
     autoStrategy: 'rr',
+    modalities: normalizeModalities(config?.modalities ?? []),
+    excludeThinkingVariants: config?.exclude_thinking_variants ?? false,
     savedModels,
     items: [],
   }
@@ -361,6 +371,25 @@ export const addCustomModelAllowlistItem = (
   return null
 }
 
+// toggleModelAllowlistStateModality 切换**分组级**功能过滤的模态。
+// 与 toggleModelAllowlistModality 刻意分开：那个只改列表显示（view filter），
+// 这个会被写进分组配置、并同时影响模型列表与网关准入。
+export const toggleModelAllowlistStateModality = (
+  state: ModelAllowlistState,
+  modality: string,
+): string[] => {
+  const key = modality.trim().toLowerCase()
+  const next = state.modalities.includes(key)
+    ? state.modalities.filter(item => item !== key)
+    : [...state.modalities, key]
+  state.modalities = normalizeModalities(next)
+  return state.modalities
+}
+
+// modelAllowlistCapabilityActive 报告分组级功能过滤是否已配置。
+export const modelAllowlistCapabilityActive = (state: ModelAllowlistState): boolean =>
+  normalizeModalities(state.modalities).length > 0 || state.excludeThinkingVariants
+
 export const buildModelAllowlistConfig = (
   state: ModelAllowlistState,
 ): ModelAllowlistConfig => {
@@ -372,6 +401,9 @@ export const buildModelAllowlistConfig = (
     models: state.autoEnabled
       ? [MODEL_ALLOWLIST_AUTO_SENTINELS[state.autoStrategy], ...models]
       : models,
+    // R6：功能过滤始终提交，空数组即"不限制"（后端 normalize 会折叠为 nil）。
+    modalities: normalizeModalities(state.modalities),
+    exclude_thinking_variants: state.excludeThinkingVariants,
   }
 }
 
@@ -388,6 +420,25 @@ const normalizeModels = (models: string[]): string[] => {
     }
     seen.add(model)
     out.push(model)
+  }
+  return out
+}
+
+// normalizeModalities 归一化模态过滤键：小写、去空白、去重保序。
+// 只接受后端 ModelModalities 里的标识，未知值丢弃（后端会 400，前端不该提交脏值）。
+const normalizeModalities = (modalities: string[]): string[] => {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of modalities) {
+    const modality = raw.trim().toLowerCase()
+    if (!modality || seen.has(modality)) {
+      continue
+    }
+    if (!(modelAllowlistModalityOptions as readonly string[]).includes(modality)) {
+      continue
+    }
+    seen.add(modality)
+    out.push(modality)
   }
   return out
 }

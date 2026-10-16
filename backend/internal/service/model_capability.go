@@ -30,6 +30,16 @@ const (
 	ModelCapabilitySourceManual   = "manual"
 )
 
+// ModelModalities 是全部受支持的模态标识，供管理端校验分组级模态白名单。
+var ModelModalities = []string{
+	ModelModalityText,
+	ModelModalityVision,
+	ModelModalityImage,
+	ModelModalityAudio,
+	ModelModalityVideo,
+	ModelModalityEmbedding,
+}
+
 // ModelCapability 描述单个模型的可用能力。
 //
 // BaseModel/ThinkingLevel 把「靠换 id 表达挡位」的写法还原出来：
@@ -247,11 +257,27 @@ type ModelCapabilityFilter struct {
 	ExcludeThinkingVariants bool     `json:"exclude_thinking_variants"`
 }
 
-// Allows 判断某个模型是否通过过滤（用于分组白名单的一键过滤）。
+// Active 报告是否配置了过滤条件。零值 = 不过滤，保证存量分组行为完全不变。
+func (f ModelCapabilityFilter) Active() bool {
+	return len(f.Modalities) > 0 || f.ExcludeThinkingVariants
+}
+
+// Allows 判断某个模型是否通过过滤（用于分组白名单的按功能过滤与分组级准入）。
+//
+// 多个模态取**并集**（任一命中即通过）：管理端勾选 text + vision 的意图是
+// 「文本模型和视觉模型都放进来」，取交集会把纯文本模型排除掉，也与选模型面板上
+// 模态 chips 的筛选语义不一致。ExcludeThinkingVariants 单独生效，两者是 AND。
 func (f ModelCapabilityFilter) Allows(modelID string) bool {
 	capability := ClassifyModelCapability(modelID)
-	for _, modality := range f.Modalities {
-		if !containsString(capability.Modalities, strings.ToLower(strings.TrimSpace(modality))) {
+	if len(f.Modalities) > 0 {
+		matched := false
+		for _, modality := range f.Modalities {
+			if containsString(capability.Modalities, strings.ToLower(strings.TrimSpace(modality))) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			return false
 		}
 	}

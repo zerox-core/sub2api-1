@@ -780,6 +780,48 @@
             </div>
             <Toggle v-model="createModelAllowlistState.enabled" />
           </div>
+          <!-- R6：分组级「按模型功能过滤」。刻意放在白名单面板之外 —— 它与白名单
+               开关是两个独立维度，不启用白名单也能生效。 -->
+          <div
+            class="mt-3 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 dark:border-amber-900/40 dark:bg-amber-900/10"
+          >
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="mr-1 text-xs font-medium text-amber-800 dark:text-amber-300">
+                {{ t("admin.groups.modelAllowlist.capabilityFilter") }}
+              </span>
+              <button
+                v-for="modality in allowlistModalityOptions"
+                :key="`cap-${modality}`"
+                type="button"
+                class="rounded px-2 py-0.5 text-[11px] font-medium transition-colors"
+                :class="
+                  createModelAllowlistState.modalities.includes(modality)
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-white text-gray-600 hover:bg-amber-100 dark:bg-dark-700 dark:text-gray-300 dark:hover:bg-dark-600'
+                "
+                @click="toggleCreateAllowlistCapabilityModality(modality)"
+              >
+                {{ t(`admin.groups.modelAllowlist.modality.${modality}`) }}
+              </button>
+              <label
+                class="ml-1 flex items-center gap-1.5 text-[11px] text-amber-800 dark:text-amber-300"
+              >
+                <Toggle v-model="createModelAllowlistState.excludeThinkingVariants" />
+                {{ t("admin.groups.modelAllowlist.excludeThinkingVariants") }}
+              </label>
+              <button
+                v-if="createModelAllowlistCapabilityActive"
+                type="button"
+                class="ml-auto rounded px-2 py-0.5 text-[11px] font-medium text-amber-700 transition-colors hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                @click="previewCreateAllowlistCapabilityFilter"
+              >
+                {{ t("admin.groups.modelAllowlist.previewCapability") }}
+              </button>
+            </div>
+            <p class="mt-1 text-[11px] leading-4 text-amber-700/80 dark:text-amber-300/70">
+              {{ t("admin.groups.modelAllowlist.capabilityHint") }}
+            </p>
+          </div>
           <div
             v-if="createModelAllowlistState.enabled"
             class="overflow-hidden rounded-lg border border-gray-200 bg-gray-50/50 dark:border-dark-600 dark:bg-dark-800/40"
@@ -2576,6 +2618,47 @@
               </p>
             </div>
             <Toggle v-model="editModelAllowlistState.enabled" />
+          </div>
+          <!-- R6：分组级「按模型功能过滤」，与白名单开关独立生效。 -->
+          <div
+            class="mt-3 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 dark:border-amber-900/40 dark:bg-amber-900/10"
+          >
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="mr-1 text-xs font-medium text-amber-800 dark:text-amber-300">
+                {{ t("admin.groups.modelAllowlist.capabilityFilter") }}
+              </span>
+              <button
+                v-for="modality in allowlistModalityOptions"
+                :key="`cap-${modality}`"
+                type="button"
+                class="rounded px-2 py-0.5 text-[11px] font-medium transition-colors"
+                :class="
+                  editModelAllowlistState.modalities.includes(modality)
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-white text-gray-600 hover:bg-amber-100 dark:bg-dark-700 dark:text-gray-300 dark:hover:bg-dark-600'
+                "
+                @click="toggleEditAllowlistCapabilityModality(modality)"
+              >
+                {{ t(`admin.groups.modelAllowlist.modality.${modality}`) }}
+              </button>
+              <label
+                class="ml-1 flex items-center gap-1.5 text-[11px] text-amber-800 dark:text-amber-300"
+              >
+                <Toggle v-model="editModelAllowlistState.excludeThinkingVariants" />
+                {{ t("admin.groups.modelAllowlist.excludeThinkingVariants") }}
+              </label>
+              <button
+                v-if="editModelAllowlistCapabilityActive"
+                type="button"
+                class="ml-auto rounded px-2 py-0.5 text-[11px] font-medium text-amber-700 transition-colors hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                @click="previewEditAllowlistCapabilityFilter"
+              >
+                {{ t("admin.groups.modelAllowlist.previewCapability") }}
+              </button>
+            </div>
+            <p class="mt-1 text-[11px] leading-4 text-amber-700/80 dark:text-amber-300/70">
+              {{ t("admin.groups.modelAllowlist.capabilityHint") }}
+            </p>
           </div>
           <div
             v-if="editModelAllowlistState.enabled"
@@ -4675,6 +4758,7 @@ import {
   createModelAllowlistViewFilter,
   filterModelAllowlistItems,
   invertModelAllowlistSelection,
+  modelAllowlistCapabilityActive,
   modelAllowlistModalityOptions,
   moveModelAllowlistItemByID,
   selectAllModelAllowlistItems,
@@ -4682,6 +4766,7 @@ import {
   setModelAllowlistAutoStrategy,
   setModelAllowlistCandidates,
   toggleModelAllowlistModality,
+  toggleModelAllowlistStateModality,
   type ModelAllowlistSortKey,
   type ModelAllowlistViewFilter,
 } from "./groupModelAllowlist";
@@ -5302,6 +5387,35 @@ const toggleCreateAllowlistModality = (modality: string) => {
 };
 const toggleEditAllowlistModality = (modality: string) => {
   toggleModelAllowlistModality(editAllowlistFilter.value, modality);
+};
+
+// R6：分组级「按模型功能过滤」。注意与上面两个 view filter 函数区分：
+// 这些改的是会被保存进分组配置、并影响模型列表与网关准入的字段。
+const toggleCreateAllowlistCapabilityModality = (modality: string) => {
+  toggleModelAllowlistStateModality(createModelAllowlistState, modality);
+};
+const toggleEditAllowlistCapabilityModality = (modality: string) => {
+  toggleModelAllowlistStateModality(editModelAllowlistState, modality);
+};
+const createModelAllowlistCapabilityActive = computed(() =>
+  modelAllowlistCapabilityActive(createModelAllowlistState),
+);
+const editModelAllowlistCapabilityActive = computed(() =>
+  modelAllowlistCapabilityActive(editModelAllowlistState),
+);
+// 保存前把分组级功能过滤一键带进候选列表的查看过滤，用来预览命中范围。
+// 只同步模态：查看过滤没有「排除挡位变体」这个维度（那是保存后才生效的准入规则）。
+const previewCreateAllowlistCapabilityFilter = () => {
+  createAllowlistFilter.value = {
+    ...createAllowlistFilter.value,
+    modalities: [...createModelAllowlistState.modalities],
+  };
+};
+const previewEditAllowlistCapabilityFilter = () => {
+  editAllowlistFilter.value = {
+    ...editAllowlistFilter.value,
+    modalities: [...editModelAllowlistState.modalities],
+  };
 };
 
 // 全选/取消只作用于筛选结果：分组 14 有 189 个模型，

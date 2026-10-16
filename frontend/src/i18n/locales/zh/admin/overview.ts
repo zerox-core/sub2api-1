@@ -1161,6 +1161,11 @@ export default {
         clearSelection: '取消选择',
         noMatch: '没有匹配的模型，试试清空搜索或筛选',
         moveNeedsDefaultOrder: '排序状态下不调整顺序，切回「默认顺序」后可上下移动',
+        capabilityFilter: '功能准入',
+        excludeThinkingVariants: '不单独放行挡位变体',
+        capabilityHint:
+          '与上面的白名单开关无关，单独生效：保存后该分组只放行命中的模型（多个模态取并集），模型列表与网关准入同时按此裁剪。',
+        previewCapability: '按此过滤候选列表',
         modality: {
           text: '文本',
           vision: '视觉',

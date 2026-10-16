@@ -2596,12 +2596,16 @@ func (h *AccountHandler) ClearRateLimit(c *gin.Context) {
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
-// ClearUnsupportedModels 清空账号级「上游明确不支持」模型清单（R5）。
+// ClearUnsupportedModels 放行账号级「上游明确不支持」清单里的模型（R5）。
 //
 // 用途：渠道补上了模型、或换了上游之后，管理员手动放行该账号被拉黑的模型，
 // 让它重新参与调度（清单存在 accounts.extra.unsupported_models，账号详情里可见）。
 //
-// DELETE /api/v1/admin/accounts/:id/unsupported-models
+// DELETE /api/v1/admin/accounts/:id/unsupported-models            → 放行全部
+// DELETE /api/v1/admin/accounts/:id/unsupported-models?model=xxx  → 只放行一个
+//
+// 单条放行用查询参数而不是路径段：模型名可能带 /（如 models/gemini-3.8-flash），
+// 放进路径段会被路由拆开。
 func (h *AccountHandler) ClearUnsupportedModels(c *gin.Context) {
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -2615,16 +2619,35 @@ func (h *AccountHandler) ClearUnsupportedModels(c *gin.Context) {
 		return
 	}
 
-	if err := h.adminService.UpdateAccountExtra(c.Request.Context(), accountID, service.UnsupportedModelExtraUpdate(nil)); err != nil {
+	var records service.AccountUnsupportedModels
+	if model := strings.TrimSpace(c.Query("model")); model != "" {
+		records = account.UnsupportedModelRecords()
+		key := service.NormalizeUnsupportedModelName(model)
+		if _, ok := records[key]; !ok {
+			response.NotFound(c, "model is not in the unsupported list")
+			return
+		}
+		delete(records, key)
+		if len(records) == 0 {
+			// 清空最后一条时写 nil，让仓储把 extra 里的键删掉而不是留空对象。
+			records = nil
+		}
+	}
+
+	if err := h.adminService.UpdateAccountExtra(c.Request.Context(), accountID, service.UnsupportedModelExtraUpdate(records)); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-	// 同步进程内副本，使本次响应立刻反映清空结果。
+	// 同步进程内副本，使本次响应立刻反映放行结果。
 	if account != nil {
 		if account.Extra == nil {
 			account.Extra = make(map[string]any, 1)
 		}
-		account.Extra[service.UnsupportedModelsExtraKey] = nil
+		if records == nil {
+			account.Extra[service.UnsupportedModelsExtraKey] = nil
+		} else {
+			account.Extra[service.UnsupportedModelsExtraKey] = records
+		}
 	}
 
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))

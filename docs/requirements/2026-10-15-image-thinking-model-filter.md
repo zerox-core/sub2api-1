@@ -590,3 +590,77 @@ mappedModel := s.getMappedModelForThinkingLevel(
 
 面板尚未直接展示 R5 的账号层「上游不支持」清单，也还没有「一键按模态筛选候选」入口
 （R6 的 `ModelCapabilityFilter` 已就绪，接上去即可）。
+
+### 2026-10-16 P7：R6 分组级功能过滤真正生效 + R5 清单可视化管理
+
+#### R6：把「分组层做模型功能性的过滤」做成真功能
+
+原来的 `ModelCapabilityFilter` 只有定义和单测，**没有任何生产调用点** —— 属于"配了但
+不影响任何请求"的假功能，必须挂到网关准入上才算完成。
+
+1. **挂在既有的统一咽喉点**：给 `GroupModelAllowlist`（service 与 domain）加两个维度
+   `Modalities []string` 与 `ExcludeThinkingVariants bool`，`Allows()` 与
+   `FilterForListing()` 共用同一个 `ModelCapabilityFilter`：
+   - `Allows()`：能力过滤 → 再走白名单匹配。因此**不启用白名单也能生效**（"纯文本分组"
+     直接挡掉图像/语音模型）。
+   - `FilterForListing()`：白名单未启用分支同样调用能力过滤，
+     保证「列表可见 ⇒ 可请求」——否则客户端会看到一个必然 404 的模型。
+2. **零迁移**：白名单本就存在 `groups.model_allowlist` 这个 jsonb 列里（`ent` 持久化
+   `domain.GroupModelAllowlist`），加字段即可，无需 DDL。
+3. **身份快照版本必须升**：`apiKeyAuthSnapshotVersion` 24 → 25。旧快照反序列化时新字段
+   为零值 = 不过滤，会让已缓存 key 静默跳过准入 —— 这正是 v10 时代踩过的坑。
+4. **顺手修掉一处语义分裂**：R7 面板的多模态 chips 是**并集**，而后端
+   `ModelCapabilityFilter` 当时是**交集**（"既是 text 又是 vision 才通过"）。管理端勾
+   text + vision 的意图显然是"两类都要放进来"，交集会把纯文本模型排除掉，于是统一为
+   并集并补了可区分用例（`[image, audio]` 取交集会得到空列表）。
+5. **配置面**：`normalizeGroupModelAllowlist` 归一化模态（小写/去重/保序），未知模态直接
+   400 `INVALID_MODEL_MODALITY`；`DuplicateGroup` 一并复制这两个字段。
+6. **UI**（沿用项目自有组件，**未引入 daisyUI** —— 该项目是 Tailwind v3，daisyUI 5 硬
+   依赖 v4）：创建与编辑两个分组面板各加一行琥珀色「功能准入」，含模态 chips、
+   「不单独放行挡位变体」开关，以及「按此过滤候选列表」把配置带进候选列表预览命中范围。
+   该行刻意放在白名单面板**之外**，因为两者是独立维度。
+
+#### R5：账号级「上游不支持」清单的人工放行
+
+1. **端点扩展**：`DELETE /admin/accounts/:id/unsupported-models` 支持
+   `?model=xxx` 只放行一条。**用查询参数而不是路径段**，因为模型名可能含 `/`
+   （如 `models/gemini-3.8-flash`），放进路径会被路由拆开。
+2. 放行最后一条时写 `nil`，让仓储删掉 extra 里的键，而不是留下空对象；
+   清单里不存在的模型返回 404 且**不产生任何写入**（避免误删整份清单）。
+3. **UI**：账号操作菜单新增「上游不支持模型」入口（带条数徽标，仅在有记录时出现），
+   弹窗按最近被拒排序展示 模型 / HTTP 状态 / 累计次数 / 最近时间 / 原因，
+   支持单条放行与全部放行；弹窗内持有的是账号副本，放行后会同步，空态立刻可见。
+
+#### ✅ 验证
+
+| 项目 | 结果 |
+| --- | --- |
+| 后端回归 | `go test ./internal/server/... ./internal/handler/... ./internal/service/...` 全绿（含 middleware 网关准入与 service 146s 全量） |
+| R6 单测 | `group_model_allowlist_capability_test.go` 6 个用例：零值无操作、模态挡图像/语音、不启用白名单也生效、排除挡位变体、归一化与 400、domain 往返不丢字段 |
+| R5 单测 | `account_handler_unsupported_models_test.go` 4 个用例：单条放行（含 `models/` 前缀与大小写归一化）、最后一条写 nil、全部放行、未知模型 404 且零写入 |
+| 前端 | `vue-tsc --noEmit` 干净；6 个 spec 文件 54 个用例全过（含新增 5 个能力过滤用例） |
+| 语义一致性 | `model_capability_test.go` 增补并集可区分用例，锁定前后端同一语义 |
+| **线上端到端（分组 23 / key 27）** | 基线：`/v1/models` 返回 7 个模型，`POST /v1/messages` 用 `claude-opus-4-6` 拿到 **HTTP 200** 与真实上游响应 `req_vrtx_011Cg56j...`；仅添加 `modalities:["audio"]`（`models` 与 `enabled` 一字未改、无重启后清 `apikey:auth:*`）后：模型列表 **0 个**，同一个请求变成 **HTTP 404 `Model "claude-opus-4-6" is not available for this group`** —— 证明它不仅裁剪列表，也在网关准入生效；回滚后 `model_allowlist` JSON 与运行前逐字节一致、列表恢复 7 个、容器 healthy |
+| 产物核对 | 线上二进制含 `INVALID_MODEL_MODALITY`、`exclude_thinking_variants` 与「功能准入」「上游不支持模型」等中英文案；两个 `DELETE .../unsupported-models` 变体均返回 401（已注册而非 404）；`/` HTTP 200 |
+
+#### 发布时的服务器清理（已固化为脚本）
+
+本次把清理从"每次记得手动做"变成仓库里的固定动作：**`deploy/release-cleanup.sh`**，
+发布成功后在服务器执行 `bash deploy/release-cleanup.sh` 即可。它的安全约束是写死的：
+
+- 正在运行的镜像由**运行中的 sub2api 容器**推导，而不是命令行传参（打错字也删不掉线上镜像）；
+- 旧 tag 逐个 `rmi`，被任何容器引用的会失败并跳过；只清 exited/dead 容器；
+- **不动**跑着的出口链路容器：`llm-mihomo`（别名 `mihomo`，`proxies.mihomo-jp` 的宿主，
+  15 个账号的出口依赖它）、`llm-tlsproxy`、`audio-proxy-bridge`（MP3 音频桥）；
+- 只清本仓库历次发布/验证的临时文件命名约定，避免误删服务器上其它项目的 `/tmp` 数据。
+
+| 清理项 | 本次结果 |
+| --- | --- |
+| Docker 构建缓存 | **12.03GB 全量回收**（`builder prune -af`），`docker system df` 从 9.612GB → **0B** |
+| 被替代的 sub2api 镜像 | 旧 tag 删除，镜像数 30 → **16**，镜像占用 4.303GB → **2.518GB** |
+| 已退出容器 | `llm-hub`（Exited 137）等移除 |
+| compose 备份 / 临时脚本 | 只保留最近 2 份 `docker-compose.yml.bak.*`；`/tmp` 清掉 157 个历次产物文件 |
+| 磁盘 | `/` 使用率 **82% → 59%**（46G/11G 可用 → 34G/24G 可用） |
+
+> `/tmp` 里剩余 135MB 属于服务器上**其它项目**（`beiwo-*.apk`、`pytest-of-ubuntu`、
+> `hub_r39_*`、`probe_big.json`），不属于本仓库的发布垃圾，**刻意保留未删**。

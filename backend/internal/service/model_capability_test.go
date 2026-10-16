@@ -92,9 +92,17 @@ func TestModelCapabilityFilterByModality(t *testing.T) {
 	imageOnly := ModelCapabilityFilter{Modalities: []string{ModelModalityImage}}
 	require.Equal(t, []string{"gpt-image-2"}, imageOnly.FilterModelIDs(models))
 
-	// 多模态条件取交集：既是 text 又是 vision 才通过
+	// 多个模态取并集：勾选 text + vision 表示「文本模型和视觉模型都放进来」
 	textVision := ModelCapabilityFilter{Modalities: []string{ModelModalityText, ModelModalityVision}}
 	require.Equal(t, []string{"gemini-3.8-flash", "claude-opus-4-6"}, textVision.FilterModelIDs(models))
+
+	// 并集语义的可区分用例：取交集会得到空列表
+	speechOrImage := ModelCapabilityFilter{Modalities: []string{ModelModalityImage, ModelModalityAudio}}
+	require.Equal(t, []string{"gpt-image-2", "mimo-v2.5-tts", "speech-2.8-hd"}, speechOrImage.FilterModelIDs(models))
+
+	// 零值 = 不过滤（存量分组行为不变）
+	require.False(t, ModelCapabilityFilter{}.Active())
+	require.Equal(t, models, ModelCapabilityFilter{}.FilterModelIDs(models))
 }
 
 func TestModelCapabilityFilterExcludesThinkingVariants(t *testing.T) {

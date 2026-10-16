@@ -1164,6 +1164,11 @@ export default {
         clearSelection: 'Clear',
         noMatch: 'No model matches the current search or filter',
         moveNeedsDefaultOrder: 'Reordering is disabled while sorted; switch back to Default order to move entries',
+        capabilityFilter: 'Capability gate',
+        excludeThinkingVariants: 'Exclude thinking-level variants',
+        capabilityHint:
+          'Independent of the allowlist switch above: this group then only serves matching models (modalities are OR-ed). Both the model list and gateway admission follow it.',
+        previewCapability: 'Filter candidates by this',
         modality: {
           text: 'text',
           vision: 'vision',

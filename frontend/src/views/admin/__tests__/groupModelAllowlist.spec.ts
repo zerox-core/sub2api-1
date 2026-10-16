@@ -4,9 +4,11 @@ import {
   addCustomModelAllowlistItem,
   buildModelAllowlistConfig,
   createModelAllowlistState,
+  modelAllowlistCapabilityActive,
   type ModelAllowlistAddError,
   setModelAllowlistAutoEnabled,
   setModelAllowlistAutoStrategy,
+  toggleModelAllowlistStateModality,
 } from "../groupModelAllowlist";
 
 import {
@@ -73,6 +75,8 @@ describe("groupModelAllowlist", () => {
     expect(buildModelAllowlistConfig(state)).toEqual({
       enabled: true,
       models: ["gpt-5.4", "gpt-5.5"],
+      modalities: [],
+      exclude_thinking_variants: false,
     });
   });
 
@@ -85,6 +89,8 @@ describe("groupModelAllowlist", () => {
     expect(buildModelAllowlistConfig(state)).toEqual({
       enabled: false,
       models: ["gpt-5.5"],
+      modalities: [],
+      exclude_thinking_variants: false,
     });
   });
 
@@ -97,6 +103,8 @@ describe("groupModelAllowlist", () => {
     expect(buildModelAllowlistConfig(state)).toEqual({
       enabled: true,
       models: ["gpt-5.5", "gpt-5.4"],
+      modalities: [],
+      exclude_thinking_variants: false,
     });
   });
 
@@ -221,5 +229,76 @@ describe("auto smart-routing panel", () => {
     });
     expect(state.autoEnabled).toBe(true);
     expect(state.autoStrategy).toBe("rand");
+  });
+
+  // R6：分组级「按模型功能过滤」——与白名单条目独立，且必须能往返保存。
+  describe("capability filter", () => {
+    it("hydrates modalities and the thinking-variant flag from a saved config", () => {
+      const state = createModelAllowlistState({
+        enabled: false,
+        models: [],
+        modalities: ["text", "image"],
+        exclude_thinking_variants: true,
+      });
+
+      expect(state.modalities).toEqual(["text", "image"]);
+      expect(state.excludeThinkingVariants).toBe(true);
+      expect(modelAllowlistCapabilityActive(state)).toBe(true);
+    });
+
+    it("normalizes modalities: lowercases, trims and drops unknown identifiers", () => {
+      const state = createModelAllowlistState({
+        modalities: [" Text ", "text", "AUDIO", "hologram"],
+      });
+
+      expect(state.modalities).toEqual(["text", "audio"]);
+    });
+
+    it("toggles a modality on and off", () => {
+      const state = createModelAllowlistState();
+
+      toggleModelAllowlistStateModality(state, "image");
+      expect(state.modalities).toEqual(["image"]);
+
+      toggleModelAllowlistStateModality(state, "image");
+      expect(state.modalities).toEqual([]);
+      expect(modelAllowlistCapabilityActive(state)).toBe(false);
+    });
+
+    it("always submits the capability filter so clearing it also persists", () => {
+      const state = createModelAllowlistState({
+        enabled: true,
+        models: ["gpt-5.4"],
+        modalities: ["vision"],
+        exclude_thinking_variants: true,
+      });
+
+      expect(buildModelAllowlistConfig(state)).toEqual({
+        enabled: true,
+        models: ["gpt-5.4"],
+        modalities: ["vision"],
+        exclude_thinking_variants: true,
+      });
+
+      state.modalities = [];
+      state.excludeThinkingVariants = false;
+      expect(buildModelAllowlistConfig(state)).toEqual({
+        enabled: true,
+        models: ["gpt-5.4"],
+        modalities: [],
+        exclude_thinking_variants: false,
+      });
+    });
+
+    it("keeps the capability filter independent from the allowlist switch", () => {
+      const state = createModelAllowlistState({
+        enabled: false,
+        modalities: ["audio"],
+      });
+
+      const config = buildModelAllowlistConfig(state);
+      expect(config.enabled).toBe(false);
+      expect(config.modalities).toEqual(["audio"]);
+    });
   });
 });
