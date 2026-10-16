@@ -100,3 +100,20 @@ Model "gpt-5.4" is not supported by any configured account in this group
 | 时间窗失效 | 超出窗口的第二次降载重新计数 |
 
 全量门：`go test ./internal/server/... ./internal/handler/... ./internal/service/` 全绿（service 143s）。
+
+### 线上实证（合成探针，跑完即删）
+
+单测只证明代码逻辑，不能证明**部署到线上的那个二进制**真的这么做，所以用隔离探针实测：临时分组 + 临时账号（全部 `ZZ-*` 前缀）+ 假上游（对每次请求都回 `503 Our servers are currently overloaded` 并计数）+ 临时 key。
+
+| 调用 | 账号 `overload_until` | 假上游累计被打 |
+| --- | --- | --- |
+| call#1 | `11:07:15` + **2 分钟** | 2 |
+| call#2 | 未延长 | 2 |
+| call#3 / call#4 | 未延长 | 2 |
+
+- call#1 之所以一次就触发：容量降载被标记为"同账号可重试"，客户端的一次请求内部把该账号重试了一次 → 连续 2 次降载 → 立刻进入冷却。**一次请求内重试预算不受影响**（先重试，后冷却）。
+- call#2–#4：假上游计数停在 2，说明**冷却期内该账号不再被选中**（该组无其他账号，客户端收到 503 `Service temporarily unavailable`）。这正是要的"避开报错上游"。
+- 日志：`openai_capacity_shed_overload_cooldown {"account_id": 49, "streak": 2, "cooldown_ms": 120000}` 与 `account_overloaded {"reason": "capacity_shed"}`。
+- 探针已完全删除：分组/账号/key 残留 0，假上游端口释放，生产分组数不变，容器 `healthy`，磁盘 24G 可用。
+
+上线后真实流量尚未触发（说明 6.1sol 该时段一直正常）；下一次 wocnm 类上游过载时会自动生效。
