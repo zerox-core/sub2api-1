@@ -664,6 +664,10 @@ export interface AdminGroup extends Group {
 export interface ModelAllowlist {
   enabled: boolean
   models: string[]
+  /** R6：分组级按模型功能过滤（空 = 不限制），多个模态取并集 */
+  modalities?: string[]
+  /** R6：不单独放行用换 id 表达挡位的变体（如 gemini-3.8-flash-high） */
+  exclude_thinking_variants?: boolean
 }
 
 // 固定账号获取 Codex Model Manifest 配置（仅 openai 分组）

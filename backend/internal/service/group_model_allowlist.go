@@ -13,19 +13,46 @@ import (
 
 // GroupModelAllowlist 是 service 层的分组模型白名单（与 domain.GroupModelAllowlist
 // 字段一致，ent 持久化用 domain 类型，边界处显式转换）。
+//
+// R6 起它同时承载分组级的「按模型功能过滤」：Modalities / ExcludeThinkingVariants
+// 与 Models 是两个独立维度（AND 叠加），前者回答"这个分组要不要图像/语音模型"，
+// 后者回答"具体暴露哪些模型"。零值 = 不过滤，存量分组行为完全不变。
 type GroupModelAllowlist struct {
 	Enabled bool     `json:"enabled"`
 	Models  []string `json:"models,omitempty"`
+	// Modalities 是允许的模态集合（空 = 不按模态限制），多个取并集。
+	Modalities []string `json:"modalities,omitempty"`
+	// ExcludeThinkingVariants 为真时，用换 id 表达挡位的变体
+	// （gemini-3.8-flash-low/-medium/-high/-tiered）不再单独放行。
+	ExcludeThinkingVariants bool `json:"exclude_thinking_variants,omitempty"`
+}
+
+// capabilityFilter 把分组级功能过滤映射为模型能力判据。
+func (a GroupModelAllowlist) capabilityFilter() ModelCapabilityFilter {
+	return ModelCapabilityFilter{
+		Modalities:              a.Modalities,
+		ExcludeThinkingVariants: a.ExcludeThinkingVariants,
+	}
 }
 
 // DomainGroupModelAllowlist 把 service 白名单转换为 ent 持久化使用的 domain 类型。
 func DomainGroupModelAllowlist(cfg GroupModelAllowlist) domain.GroupModelAllowlist {
-	return domain.GroupModelAllowlist{Enabled: cfg.Enabled, Models: cfg.Models}
+	return domain.GroupModelAllowlist{
+		Enabled:                 cfg.Enabled,
+		Models:                  cfg.Models,
+		Modalities:              cfg.Modalities,
+		ExcludeThinkingVariants: cfg.ExcludeThinkingVariants,
+	}
 }
 
 // GroupModelAllowlistFromDomain 把 ent 读出的 domain 白名单转换为 service 类型。
 func GroupModelAllowlistFromDomain(cfg domain.GroupModelAllowlist) GroupModelAllowlist {
-	return GroupModelAllowlist{Enabled: cfg.Enabled, Models: cfg.Models}
+	return GroupModelAllowlist{
+		Enabled:                 cfg.Enabled,
+		Models:                  cfg.Models,
+		Modalities:              cfg.Modalities,
+		ExcludeThinkingVariants: cfg.ExcludeThinkingVariants,
+	}
 }
 
 // supplementUnmappedOpenAIModels ensures a partial mapping catalog does not
@@ -50,7 +77,15 @@ func supplementUnmappedOpenAIModels(accounts []Account, models []string) []strin
 // 条目 TrimSpace、按小写去重保序；`*` 可出现在任意位置；
 // enabled=true 且列表为空视为配置错误，返回 400 而不是运行时静默放行/拒绝。
 func normalizeGroupModelAllowlist(cfg GroupModelAllowlist) (GroupModelAllowlist, error) {
-	out := GroupModelAllowlist{Enabled: cfg.Enabled}
+	out := GroupModelAllowlist{
+		Enabled:                 cfg.Enabled,
+		ExcludeThinkingVariants: cfg.ExcludeThinkingVariants,
+	}
+	modalities, err := normalizeGroupCapabilityModalities(cfg.Modalities)
+	if err != nil {
+		return GroupModelAllowlist{}, err
+	}
+	out.Modalities = modalities
 	if len(cfg.Models) == 0 {
 		if out.Enabled {
 			return out, infraerrors.New(http.StatusBadRequest, "INVALID_MODEL_ALLOWLIST", "model allowlist cannot be enabled with an empty model list")
@@ -81,6 +116,35 @@ func normalizeGroupModelAllowlist(cfg GroupModelAllowlist) (GroupModelAllowlist,
 	return out, nil
 }
 
+// normalizeGroupCapabilityModalities 归一化分组级模态白名单：小写、去重保序。
+// 未知模态直接 400 —— 否则会写进库里静默不生效，正是"配了但没用"的假功能。
+func normalizeGroupCapabilityModalities(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, raw := range values {
+		modality := strings.ToLower(strings.TrimSpace(raw))
+		if modality == "" {
+			continue
+		}
+		if !slices.Contains(ModelModalities, modality) {
+			return nil, infraerrors.New(http.StatusBadRequest, "INVALID_MODEL_MODALITY",
+				"unsupported model modality: "+modality)
+		}
+		if _, ok := seen[modality]; ok {
+			continue
+		}
+		seen[modality] = struct{}{}
+		out = append(out, modality)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
 // ModelAllowlistEnabled 报告该分组是否启用了模型白名单。
 // 开启后所有携带模型的网关请求与模型列表接口都受白名单约束。
 func (g *Group) ModelAllowlistEnabled() bool {
@@ -92,11 +156,16 @@ func (g *Group) ModelAllowlistEnabled() bool {
 // 候选形式覆盖代码中已有的模型名等价规则（Gemini models/ 前缀、
 // Antigravity/Claude -thinking 宽容规则、OpenAI 推理后缀），不做模糊匹配。
 func (a GroupModelAllowlist) Allows(model string) bool {
-	if !a.Enabled {
-		return true
-	}
 	model = strings.TrimSpace(model)
 	if model == "" {
+		return true
+	}
+	// R6：功能过滤与白名单是两个独立维度 —— 即使没开白名单，
+	// 「纯文本分组」也要挡掉图像/语音模型。
+	if !a.capabilityFilter().Allows(model) {
+		return false
+	}
+	if !a.Enabled {
 		return true
 	}
 	candidates := groupModelAllowlistCandidates(model)
@@ -175,7 +244,8 @@ func groupModelAllowlistCandidates(model string) []string {
 // 与真实同名模型全局去重：真实模型在 source 中时优先输出真实模型。
 func (a GroupModelAllowlist) FilterForListing(source []string) []string {
 	if !a.Enabled {
-		return source
+		// R6：白名单没开，分组级功能过滤依然生效。
+		return a.filterListingByCapability(source)
 	}
 	if len(a.Models) == 0 {
 		// 开启但为空的配置在管理端已被拒绝；对遗留脏数据保持“看到什么 = 能调什么”，
@@ -232,7 +302,19 @@ func (a GroupModelAllowlist) FilterForListing(source []string) []string {
 			add(entry)
 		}
 	}
-	return filtered
+	return a.filterListingByCapability(filtered)
+}
+
+// filterListingByCapability 应用分组级功能过滤；未配置时原样返回（零开销路径）。
+//
+// 「列表可见 ⇒ 可请求」必须与 Allows 保持一致：准入挡掉的模型不能出现在列表里，
+// 否则客户端会看到一个调用必然失败的模型。
+func (a GroupModelAllowlist) filterListingByCapability(models []string) []string {
+	filter := a.capabilityFilter()
+	if !filter.Active() {
+		return models
+	}
+	return filter.FilterModelIDs(models)
 }
 
 // allowlistSourcePatternAllowsModel 沿用 filterModelsByCustomList 时代的匹配规则：

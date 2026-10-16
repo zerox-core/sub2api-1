@@ -102,6 +102,45 @@ export async function getById(id: number): Promise<AdminGroup> {
   return data
 }
 
+/** 单个模型的能力分类，由后端 service.model_capability.go 判定（R6）。 */
+export interface ModelCapabilityInfo {
+  model_id: string
+  base_model: string
+  modalities: string[]
+  reasoning: boolean
+  vision: boolean
+  thinking_level?: string
+  source?: string
+}
+
+export interface ModelAllowlistCandidates {
+  models: string[]
+  capabilities: ModelCapabilityInfo[]
+}
+
+/**
+ * Get candidate models plus their capability classification.
+ *
+ * The R7 picker filters by modality, so it needs the same capability judgement
+ * the gateway uses; the backend attaches it to this endpoint to avoid a second
+ * round trip and a second rule set.
+ */
+export async function getModelAllowlistCandidatesWithCapabilities(
+  id: number,
+  platform?: GroupPlatform
+): Promise<ModelAllowlistCandidates> {
+  const { data } = await apiClient.get<{
+    models: string[]
+    capabilities?: ModelCapabilityInfo[]
+  }>(`/admin/groups/${id}/model-allowlist-candidates`, {
+    params: platform ? { platform } : undefined
+  })
+  return {
+    models: data.models || [],
+    capabilities: data.capabilities || []
+  }
+}
+
 /**
  * Get candidate models for the group model allowlist.
  * id=0 returns platform default models for create flow.
@@ -110,13 +149,8 @@ export async function getModelAllowlistCandidates(
   id: number,
   platform?: GroupPlatform
 ): Promise<string[]> {
-  const { data } = await apiClient.get<{ models: string[] }>(
-    `/admin/groups/${id}/model-allowlist-candidates`,
-    {
-      params: platform ? { platform } : undefined
-    }
-  )
-  return data.models || []
+  const { models } = await getModelAllowlistCandidatesWithCapabilities(id, platform)
+  return models
 }
 
 export interface ModelAllowlistSource {
@@ -510,6 +544,7 @@ export const groupsAPI = {
   getLiveCapability,
   getById,
   getModelAllowlistCandidates,
+  getModelAllowlistCandidatesWithCapabilities,
   getModelAllowlistSources,
   create,
   duplicate,

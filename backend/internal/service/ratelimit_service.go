@@ -2002,6 +2002,22 @@ func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
 	slog.Info("account_overloaded", "account_id", account.ID, "until", until)
 }
 
+// setAccountOverloadCooldown 用显式时长给账号打过载冷却，reason 仅用于日志与
+// 事件标注。容量降载这类上游瞬时状态使用固定的短冷却，因此不走 handle529 那条
+// 依赖管理员配置的 529 全局冷却（那是给账号真正过载信号用的）。
+func (s *RateLimitService) setAccountOverloadCooldown(ctx context.Context, account *Account, cooldown time.Duration, reason string) {
+	if account == nil || cooldown <= 0 {
+		return
+	}
+	until := time.Now().Add(cooldown)
+	s.notifyAccountSchedulingBlocked(account, until, reason)
+	if err := s.accountRepo.SetOverloaded(ctx, account.ID, until); err != nil {
+		slog.Warn("overload_set_failed", "account_id", account.ID, "reason", reason, "error", err)
+		return
+	}
+	slog.Info("account_overloaded", "account_id", account.ID, "until", until, "reason", reason)
+}
+
 // UpdateSessionWindow 从成功响应更新5h窗口状态
 func (s *RateLimitService) UpdateSessionWindow(ctx context.Context, account *Account, headers http.Header) {
 	status := headers.Get("anthropic-ratelimit-unified-5h-status")
@@ -2531,6 +2547,10 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 	if shouldSkipCodexPlanGatedImageModelCooldown(ctx, reason, requestedModel, modelKey) {
 		return true
 	}
+	// R5：除 30 分钟临时冷却外，再把「上游明确不支持该模型」持久记账到账号 extra。
+	// 冷却到期或进程重启后就不会重复踩同一个确定性 404，管理端也能看到
+	// 每个账号实际吃不下哪些模型。
+	s.persistUnsupportedModel(ctx, account, requestedModel, statusCode, reason)
 	resetAt := time.Now().Add(cooldown)
 	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, resetAt, reason); err != nil {
 		slog.Warn("upstream_model_not_found_set_model_rate_limit_failed", "account_id", account.ID, "model", modelKey, "reason", reason, "error", err)
@@ -2538,6 +2558,40 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 	}
 	slog.Info("upstream_model_not_found_model_rate_limited", "account_id", account.ID, "model", modelKey, "reason", reason, "reset_at", resetAt)
 	return true
+}
+
+// persistUnsupportedModel 把「上游明确不支持该模型」写进 accounts.extra。
+//
+// 与 SetModelRateLimit 的差别是持久性：冷却会到期、进程会重启，而这条记录会一直
+// 参与 IsModelSupported 判定（直到 TTL 内未再命中被清理，或管理员清除），
+// 因此调度侧不会再反复选中一个上游根本不提供该模型的账号。
+//
+// 键用 requestedModel（客户端请求名）而非限流 key：IsModelSupported 收到的也是
+// 请求名，两侧必须用同一套归一化才能对上。
+func (s *RateLimitService) persistUnsupportedModel(ctx context.Context, account *Account, requestedModel string, statusCode int, reason string) {
+	if s == nil || s.accountRepo == nil || account == nil {
+		return
+	}
+	updated, changed := recordUnsupportedModel(account.UnsupportedModelRecords(), requestedModel, statusCode, reason, time.Now())
+	if !changed {
+		return
+	}
+	if err := s.accountRepo.UpdateExtra(ctx, account.ID, UnsupportedModelExtraUpdate(updated)); err != nil {
+		slog.Warn("unsupported_model_persist_failed", "account_id", account.ID, "model", requestedModel, "error", err)
+		return
+	}
+	// 同步进程内副本，让同一进程的后续判定立刻看到新记录。
+	if account.Extra == nil {
+		account.Extra = make(map[string]any, 1)
+	}
+	account.Extra[UnsupportedModelsExtraKey] = updated
+	slog.Info("unsupported_model_recorded",
+		"account_id", account.ID,
+		"model", requestedModel,
+		"status", statusCode,
+		"count", updated[normalizeUnsupportedModelKey(requestedModel)].Count,
+		"reason", reason,
+	)
 }
 
 // shouldSkipCodexPlanGatedImageModelCooldown 判断这次 Codex plan-gated 400 是否

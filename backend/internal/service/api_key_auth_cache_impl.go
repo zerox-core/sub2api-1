@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 24 // v24: group model_allowlist field (renamed from models_list_config, enforcing semantics)
+const apiKeyAuthSnapshotVersion = 25 // v25: group model_allowlist 能力过滤（modalities / exclude_thinking_variants）；v24: renamed from models_list_config
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int

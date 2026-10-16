@@ -858,6 +858,12 @@ func resolveRequestedModelInMapping(mapping map[string]string, requestedModel st
 // （isDeepseekServableModel）——未知模型名透传上游只会得到 404/400，并误触发
 // per-(账号,模型) 30 分钟冷却；带 [1m] 上下文后缀的写法先归一化再比对。
 func (a *Account) IsModelSupported(requestedModel string) bool {
+	// 账号层真实支持性过滤（R5）：上游已明确说过不支持的模型直接排除。
+	// 必须在透传短路之前判定——透传账号同样会遇到"上游根本没有这个模型"，
+	// 而那正是 per-(账号,模型) 404 冷却反复被触发的来源。
+	if a.IsModelMarkedUnsupported(requestedModel) {
+		return false
+	}
 	// 透传模式仅替换认证、模型语义完全交由上游决定，因此放行所有模型。
 	// 该短路必须在 model_mapping 判定之前：账号从"白名单模式"切换到透传后，
 	// credentials 里常残留旧的非空 model_mapping，若不在此放行，透传账号会被

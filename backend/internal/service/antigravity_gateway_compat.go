@@ -222,7 +222,7 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 	mappedModel := s.getMappedModelForThinkingLevel(
 		account,
 		request.originalModel,
-		geminiThinkingLevelFromClaudeThinking(claudeRequest.Thinking),
+		geminiThinkingLevelFromAntigravityCompat(request.reasoningEffort, claudeRequest.Thinking),
 	)
 	if mappedModel == "" {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)

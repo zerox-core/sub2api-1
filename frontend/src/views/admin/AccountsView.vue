@@ -461,8 +461,14 @@
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
+    <AccountUnsupportedModelsModal
+      :show="showUnsupportedModels"
+      :account="unsupportedModelsAcc"
+      @close="closeUnsupportedModelsModal"
+      @updated="handleUnsupportedModelsUpdated"
+    />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" @unsupported-models="handleUnsupportedModels" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -518,6 +524,7 @@ import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
 import AccountTestModal from '@/components/admin/account/AccountTestModal.vue'
 import AccountStatsModal from '@/components/admin/account/AccountStatsModal.vue'
+import AccountUnsupportedModelsModal from '@/components/admin/account/AccountUnsupportedModelsModal.vue'
 import ScheduledTestsPanel from '@/components/admin/account/ScheduledTestsPanel.vue'
 import type { SelectOption } from '@/components/common/Select.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
@@ -2388,6 +2395,31 @@ const handleResetQuota = async (a: Account) => {
   } catch (error) {
     console.error('Failed to reset quota:', error)
   }
+}
+
+// R5：账号级「上游明确不支持」清单的人工放行入口。
+const showUnsupportedModels = ref(false)
+const unsupportedModelsAcc = ref<Account | null>(null)
+const handleUnsupportedModels = (a: Account) => {
+  unsupportedModelsAcc.value = a
+  showUnsupportedModels.value = true
+}
+const closeUnsupportedModelsModal = () => {
+  showUnsupportedModels.value = false
+  unsupportedModelsAcc.value = null
+}
+const handleUnsupportedModelsUpdated = (updated: Account, meta: { model: string | null }) => {
+  patchAccountInList(updated)
+  // 弹窗内持有的是账号副本，清单可能已被清空：同步它，让空态立刻可见。
+  if (unsupportedModelsAcc.value?.id === updated.id) {
+    unsupportedModelsAcc.value = updated
+  }
+  enterAutoRefreshSilentWindow()
+  appStore.showSuccess(
+    meta.model
+      ? t('admin.accounts.unsupportedModels.releaseSuccess', { model: meta.model })
+      : t('admin.accounts.unsupportedModels.releaseAllSuccess'),
+  )
 }
 
 const privacyResultMessageKey = (account: Account): { type: 'success' | 'error'; key: string } => {

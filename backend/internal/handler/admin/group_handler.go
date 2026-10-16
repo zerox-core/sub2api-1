@@ -627,7 +627,21 @@ func (h *GroupHandler) GetGroupModelAllowlistCandidates(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, gin.H{"models": models})
+	// R7：候选模型按模态打标签，供分组选模型面板做筛选。
+	// 判定复用 service.model_capability.go（与账号层真实支持性过滤同一份逻辑），
+	// 前后端不各写一套正则，避免出现"面板说多模态、网关按纯文本处理"的情况。
+	capabilities := service.ClassifyModelCapabilities(models)
+	byModality := make(map[string][]string)
+	for _, item := range capabilities {
+		for _, modality := range item.Modalities {
+			byModality[modality] = append(byModality[modality], item.ModelID)
+		}
+	}
+	response.Success(c, gin.H{
+		"models":       models,
+		"capabilities": capabilities,
+		"by_modality":  byModality,
+	})
 }
 
 // GetGroupModelAllowlistSources handles getting per-model source accounts for the group model allowlist.
