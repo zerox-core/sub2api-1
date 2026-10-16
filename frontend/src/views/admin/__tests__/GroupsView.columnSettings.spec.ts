@@ -9,6 +9,7 @@ const {
   getAllGroups,
   getModelAllowlistCandidates,
   getModelAllowlistCandidatesWithCapabilities,
+  getGroupEffectiveModels,
   getUsageSummary,
   getCapacitySummary,
   getLiveCapability,
@@ -23,6 +24,7 @@ const {
   getAllGroups: vi.fn(),
   getModelAllowlistCandidates: vi.fn(),
   getModelAllowlistCandidatesWithCapabilities: vi.fn(),
+  getGroupEffectiveModels: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
   getLiveCapability: vi.fn(),
@@ -59,6 +61,7 @@ vi.mock('@/api/admin', () => ({
       getAll: getAllGroups,
       getModelAllowlistCandidates,
       getModelAllowlistCandidatesWithCapabilities,
+      getGroupEffectiveModels,
       getUsageSummary,
       getCapacitySummary,
       getLiveCapability,
@@ -244,6 +247,7 @@ describe('admin GroupsView column settings', () => {
     getAllGroups.mockReset()
     getModelAllowlistCandidates.mockReset()
     getModelAllowlistCandidatesWithCapabilities.mockReset()
+    getGroupEffectiveModels.mockReset()
     getUsageSummary.mockReset()
     getCapacitySummary.mockReset()
     getLiveCapability.mockReset()
@@ -267,6 +271,7 @@ describe('admin GroupsView column settings', () => {
       models: [],
       capabilities: [],
     })
+    getGroupEffectiveModels.mockResolvedValue([])
     getUsageSummary.mockResolvedValue([])
     getCapacitySummary.mockResolvedValue([])
     getLiveCapability.mockResolvedValue({ supported: false })

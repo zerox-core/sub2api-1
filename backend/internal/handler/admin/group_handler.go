@@ -644,6 +644,34 @@ func (h *GroupHandler) GetGroupModelAllowlistCandidates(c *gin.Context) {
 	})
 }
 
+// GetGroupEffectiveModels handles listing the models a group can actually serve.
+// GET /api/v1/admin/groups/:id/effective-models
+//
+// 与用户端 /v1/models 共用 ComputeGroupEffectiveModels，因此管理端分组弹窗与
+// 用户 Key 弹窗看到的是同一份列表；候选超集请看 .../model-allowlist-candidates。
+func (h *GroupHandler) GetGroupEffectiveModels(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
+	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || groupID < 0 {
+		response.BadRequest(c, "Invalid group ID")
+		return
+	}
+
+	models, err := h.adminService.GetGroupEffectiveModels(
+		c.Request.Context(),
+		groupID,
+		c.Query("platform"),
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{"models": models})
+}
+
 // GetGroupModelAllowlistSources handles getting per-model source accounts for the group model allowlist.
 // GET /api/v1/admin/groups/:id/model-allowlist-sources
 func (h *GroupHandler) GetGroupModelAllowlistSources(c *gin.Context) {

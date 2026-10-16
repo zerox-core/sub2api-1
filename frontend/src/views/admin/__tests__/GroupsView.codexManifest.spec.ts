@@ -10,6 +10,7 @@ const {
   listGroups,
   getModelAllowlistCandidates,
   getModelAllowlistCandidatesWithCapabilities,
+  getGroupEffectiveModels,
   getUsageSummary,
   getCapacitySummary,
   getLiveCapability,
@@ -17,6 +18,7 @@ const {
   listGroups: vi.fn(),
   getModelAllowlistCandidates: vi.fn(),
   getModelAllowlistCandidatesWithCapabilities: vi.fn(),
+  getGroupEffectiveModels: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
   getLiveCapability: vi.fn(),
@@ -29,6 +31,7 @@ vi.mock("@/api/admin", () => ({
       getAll: vi.fn(),
       getModelAllowlistCandidates,
       getModelAllowlistCandidatesWithCapabilities,
+      getGroupEffectiveModels,
       getUsageSummary,
       getCapacitySummary,
       getLiveCapability,
@@ -237,6 +240,7 @@ describe("GroupsView Codex manifest binding", () => {
     listGroups.mockReset();
     getModelAllowlistCandidates.mockReset();
     getModelAllowlistCandidatesWithCapabilities.mockReset();
+    getGroupEffectiveModels.mockReset();
     getUsageSummary.mockReset();
     getCapacitySummary.mockReset();
     getLiveCapability.mockReset();
@@ -253,6 +257,7 @@ describe("GroupsView Codex manifest binding", () => {
       models: [],
       capabilities: [],
     });
+    getGroupEffectiveModels.mockResolvedValue([]);
     getUsageSummary.mockResolvedValue([]);
     getCapacitySummary.mockResolvedValue([]);
     getLiveCapability.mockResolvedValue({ supported: false });

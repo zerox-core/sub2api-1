@@ -220,6 +220,99 @@ func (s *adminServiceImpl) ListCompositeRoutes(ctx context.Context, groupID int6
 	return s.compositeRouteRepo.ListByGroup(ctx, groupID, true)
 }
 
+// GetGroupEffectiveModels 返回分组的真实可调用模型列表。
+//
+// 与用户端 /v1/models（GatewayHandler.Models）走同一份计算实现
+// （ComputeGroupEffectiveModels），因此管理端分组弹窗与用户 Key 弹窗展示的
+// 列表逐字一致；这也是「面板显示 = 实际可调」这一不变量的落地位置。
+// 与 GetGroupModelsListCandidates 的区别：后者是供白名单编辑器挑选的候选超集。
+func (s *adminServiceImpl) GetGroupEffectiveModels(ctx context.Context, id int64, platform string) ([]string, error) {
+	platform = strings.TrimSpace(platform)
+	var group *Group
+	if id > 0 {
+		loaded, err := s.groupRepo.GetByIDLite(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		group = loaded
+		if platform == "" && group != nil {
+			platform = group.Platform
+		}
+	}
+	if platform == "" {
+		platform = PlatformAnthropic
+	}
+
+	if id <= 0 || s.accountRepo == nil {
+		in := GroupEffectiveModelsInput{Platform: platform}
+		if group != nil {
+			in.Allowlist = group.ModelAllowlist
+		}
+		return ComputeGroupEffectiveModels(in), nil
+	}
+
+	accounts, err := s.accountRepo.ListSchedulableByGroupID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	byPlatform := make(map[string][]string)
+	schedulable := make(map[string]struct{})
+	for _, acc := range accounts {
+		if acc.Platform == "" {
+			continue
+		}
+		schedulable[acc.Platform] = struct{}{}
+	}
+
+	in := GroupEffectiveModelsInput{
+		Platform:             platform,
+		SchedulablePlatforms: schedulable,
+		// 与 GatewayHandler.Models 一致：/v1/models 的 composite 分支取
+		// includeSystemOne=true，因此管理端必须同样纳入 TypeSafe 模型。
+		IncludeSystemOne: platform == PlatformComposite,
+	}
+	if group != nil {
+		in.Allowlist = group.ModelAllowlist
+	}
+
+	if platform == PlatformComposite {
+		// 不按 schedulable 过滤平台：mixed scheduling 允许某个具体平台的账号
+		// 出现在另一平台下，逐平台求值后才能与 GetAvailableModels 的结果一致。
+		for _, concrete := range domain.CompositePrecedencePlatformIDs() {
+			byPlatform[concrete] = availableModelsForPlatform(accounts, concrete)
+		}
+		if s.compositeResolver != nil && id > 0 {
+			routeModels, err := s.compositeResolver.ListExactPublicModels(ctx, id, "", true)
+			if err == nil {
+				in.CompositeRouteModels = routeModels
+			}
+		}
+	} else {
+		byPlatform[platform] = availableModelsForPlatform(accounts, platform)
+	}
+	in.AvailableByPlatform = byPlatform
+
+	return ComputeGroupEffectiveModels(in), nil
+}
+
+// availableModelsForPlatform 用给定账号集合计算某平台的账号映射键集合。
+func availableModelsForPlatform(accounts []Account, platform string) []string {
+	scoped := make([]Account, 0, len(accounts))
+	for _, acc := range accounts {
+		if acc.Platform == platform {
+			scoped = append(scoped, acc)
+			continue
+		}
+		// mixed scheduling：网关在 GetAvailableModels 里会带上跨平台账号，
+		// 由 mixedListingAccountAllowed 决定是否纳入。
+		if mixedListingAccountAllowed(platform, &acc) {
+			scoped = append(scoped, acc)
+		}
+	}
+	return availableModelsFromAccounts(scoped, platform)
+}
+
 func (s *adminServiceImpl) CreateCompositeRoute(ctx context.Context, groupID int64, input CompositeRouteInput) (*CompositeModelRoute, error) {
 	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationCompositeRoute); err != nil {
 		return nil, err

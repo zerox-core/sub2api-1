@@ -239,8 +239,10 @@ const loadData = async () => {
   loading.value = true
   loadError.value = ''
   try {
-    // 只取候选模型 ID：类型判定不需要能力目录，避免与管理端/用户端产生分歧
-    const models = await adminAPI.groups.getModelAllowlistCandidates(
+    // 必须是「真实可调用」列表：与用户端 /v1/models 同源。
+    // 候选超集（getModelAllowlistCandidates）允许包含当前不可调用的模型，
+    // 用在这里会让面板显示与用户实际可调产生偏差。
+    const models = await adminAPI.groups.getGroupEffectiveModels(
       props.group.id,
       props.group.platform,
     )

@@ -1422,64 +1422,17 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		return nil
 	}
 
-	// Filter by platform if specified. Mixed scheduling (a gemini group routing
-	// to antigravity accounts) is honoured here as well, so the advertised list
-	// stays in sync with what the request path can actually serve.
-	if platform != "" {
-		filtered := make([]Account, 0)
-		for _, acc := range accounts {
-			if acc.Platform == platform || mixedListingAccountAllowed(platform, &acc) {
-				filtered = append(filtered, acc)
-			}
-		}
-		accounts = filtered
-	}
-
-	// Collect unique models from all accounts
-	modelSet := make(map[string]struct{})
-	hasAnyMapping := false
-
-	for _, acc := range accounts {
-		// Passthrough routing accepts models independently of model_mapping, so a
-		// stale mapping on a passthrough account must not narrow the public list.
-		// Treat it like an unmapped account: skip its mapping here and let
-		// supplementUnmappedOpenAIModels contribute the default set. Mappings on
-		// the ordinary accounts in the same group still count.
-		if platform == PlatformOpenAI && acc.IsOpenAIPassthroughEnabled() {
-			continue
-		}
-
-		mapping := acc.GetModelMapping()
-		for model := range mapping {
-			// Accounts pulled in through mixed scheduling only contribute the
-			// models that belong to the listing platform (e.g. an antigravity
-			// account's claude-* mappings must not surface on a gemini group).
-			if platform != "" && acc.Platform != platform && !mixedListingModelAllowed(platform, model) {
-				continue
-			}
-			modelSet[model] = struct{}{}
-			hasAnyMapping = true
-		}
-	}
+	// 计算逻辑收敛到 availableModelsFromAccounts（group_effective_models.go），
+	// 管理端「真实可调用模型」复用同一实现，避免两套口径漂移。
+	models := availableModelsFromAccounts(accounts, platform)
 
 	// If no account has model_mapping, return nil (use default)
-	if !hasAnyMapping {
+	if len(models) == 0 {
 		if s.modelsListCache != nil {
 			s.modelsListCache.Set(cacheKey, []string(nil), s.modelsListCacheTTL)
 			modelsListCacheStoreTotal.Add(1)
 		}
 		return nil
-	}
-
-	// Convert to slice
-	models := make([]string, 0, len(modelSet))
-	for model := range modelSet {
-		models = append(models, model)
-	}
-	sort.Strings(models)
-
-	if platform == PlatformOpenAI {
-		models = supplementUnmappedOpenAIModels(accounts, models)
 	}
 
 	if s.modelsListCache != nil {

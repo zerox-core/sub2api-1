@@ -302,6 +302,12 @@ func (s *stubAdminService) GetGroupModelsListCandidates(ctx context.Context, id 
 	return []string{"claude-sonnet-4-6"}, nil
 }
 
+func (s *stubAdminService) GetGroupEffectiveModels(ctx context.Context, id int64, platform string) ([]string, error) {
+	// 此桩里让真实可调用列表与候选超集同值：这些测试关注 handler 的响应形状
+	// 与简单模式门禁，而非服务层的 FilterForListing 过滤算法。
+	return s.GetGroupModelsListCandidates(ctx, id, platform)
+}
+
 func (s *stubAdminService) GetGroupModelAllowlistSources(ctx context.Context, id int64, platform string) (*service.GroupModelAllowlistSources, error) {
 	return &service.GroupModelAllowlistSources{
 		Sources:  map[string][]service.ModelAllowlistSource{},

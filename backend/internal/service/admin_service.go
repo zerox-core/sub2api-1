@@ -40,6 +40,9 @@ type AdminService interface {
 	GetAllGroupsIncludingInactive(ctx context.Context) ([]Group, error)
 	GetGroup(ctx context.Context, id int64) (*Group, error)
 	GetGroupModelsListCandidates(ctx context.Context, id int64, platform string) ([]string, error)
+	// GetGroupEffectiveModels 返回分组的真实可调用模型列表，与用户端 /v1/models
+	// 共用同一实现；管理端分组弹窗据此展示「面板显示 = 实际可调」。
+	GetGroupEffectiveModels(ctx context.Context, id int64, platform string) ([]string, error)
 	// GetGroupModelAllowlistSources 返回分组内各候选模型的来源账号
 	// （按组内可调度账号 model_mapping 的客户端模型名归集）与无映射（透传）账号。
 	GetGroupModelAllowlistSources(ctx context.Context, id int64, platform string) (*GroupModelAllowlistSources, error)

@@ -1452,16 +1452,10 @@ func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {
 }
 
 // modelListingSource 汇总模型列表过滤的候选来源：账号映射键（availableModels）
-// 与平台默认列表（fallbackModels）。账号映射为空时回落默认列表；Anthropic
-// 平台两者取并集，其余平台以账号映射键为准。
+// 与平台默认列表（fallbackModels）。实现收敛到 service 层，与管理端
+// 「真实可调用模型」共用同一口径。
 func modelListingSource(platform string, availableModels, fallbackModels []string) []string {
-	if len(availableModels) == 0 {
-		return fallbackModels
-	}
-	if platform == service.PlatformAnthropic {
-		return mergeModelIDs(availableModels, fallbackModels)
-	}
-	return availableModels
+	return service.ModelListingSource(platform, availableModels, fallbackModels)
 }
 
 func defaultCodexModelIDsForPlatform(platform string) []string {
@@ -1475,76 +1469,10 @@ func defaultCodexModelIDsForPlatform(platform string) []string {
 	}
 }
 
+// defaultModelIDsForPlatform 委托给 service.DefaultModelIDsForPlatform，
+// 使静态平台目录在服务端只有一份定义（含 composite 的 TypeSafe 排除规则）。
 func defaultModelIDsForPlatform(platform string) []string {
-	switch platform {
-	case service.PlatformOpenAI:
-		return openai.DefaultModelIDs()
-	case service.PlatformGemini:
-		ids := make([]string, 0, len(geminicli.DefaultModels))
-		for _, model := range geminicli.DefaultModels {
-			ids = append(ids, model.ID)
-		}
-		return ids
-	case service.PlatformAntigravity:
-		models := antigravity.DefaultModels()
-		ids := make([]string, 0, len(models))
-		for _, model := range models {
-			ids = append(ids, model.ID)
-		}
-		return ids
-	case service.PlatformAnthropic:
-		return claude.DefaultModelIDs()
-	case service.PlatformGrok:
-		return xai.DefaultModelIDs()
-	case service.PlatformOpenCodeGo:
-		return service.DefaultOpenCodeGoModelIDs()
-	case service.PlatformTypeSafe:
-		return []string{"jev-latest"}
-	case service.PlatformComposite:
-		ids := make([]string, 0)
-		seen := make(map[string]struct{})
-		for _, concretePlatform := range domain.CompositePrecedencePlatformIDs() {
-			// TypeSafe is deliberately skipped: jev-latest only works through
-			// /v1/systemone, so the static fallback never advertises it to LLM
-			// clients. compositeAvailableModels lists it when the group can serve it.
-			if concretePlatform == service.PlatformTypeSafe {
-				continue
-			}
-			for _, id := range defaultModelIDsForPlatform(concretePlatform) {
-				if _, ok := seen[id]; ok {
-					continue
-				}
-				seen[id] = struct{}{}
-				ids = append(ids, id)
-			}
-		}
-		return ids
-	default:
-		ids := make([]string, 0, len(claude.DefaultModels))
-		for _, model := range claude.DefaultModels {
-			ids = append(ids, model.ID)
-		}
-		return ids
-	}
-}
-
-func mergeModelIDs(primary, secondary []string) []string {
-	seen := make(map[string]struct{}, len(primary)+len(secondary))
-	merged := make([]string, 0, len(primary)+len(secondary))
-	for _, models := range [][]string{primary, secondary} {
-		for _, model := range models {
-			model = strings.TrimSpace(model)
-			if model == "" {
-				continue
-			}
-			if _, ok := seen[model]; ok {
-				continue
-			}
-			seen[model] = struct{}{}
-			merged = append(merged, model)
-		}
-	}
-	return merged
+	return service.DefaultModelIDsForPlatform(platform)
 }
 
 // AntigravityModels 返回 Antigravity 支持的全部模型

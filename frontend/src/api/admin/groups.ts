@@ -153,6 +153,25 @@ export async function getModelAllowlistCandidates(
   return models
 }
 
+/**
+ * Get the models a group can actually call.
+ *
+ * This mirrors the user-facing `/v1/models` computation on the backend
+ * (ComputeGroupEffectiveModels), so the admin group modal and the user Key
+ * modal render byte-identical lists. Do NOT use the candidate superset here:
+ * candidates intentionally include models the group cannot serve yet.
+ */
+export async function getGroupEffectiveModels(
+  id: number,
+  platform?: GroupPlatform
+): Promise<string[]> {
+  const { data } = await apiClient.get<{ models: string[] }>(
+    `/admin/groups/${id}/effective-models`,
+    { params: platform ? { platform } : undefined }
+  )
+  return data.models || []
+}
+
 export interface ModelAllowlistSource {
   id: number
   name: string
@@ -546,6 +565,7 @@ export const groupsAPI = {
   getModelAllowlistCandidates,
   getModelAllowlistCandidatesWithCapabilities,
   getModelAllowlistSources,
+  getGroupEffectiveModels,
   create,
   duplicate,
   update,
