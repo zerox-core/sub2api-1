@@ -101,9 +101,29 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 		scheduleOllamaCloudUsageActivity(s.deferredService, account)
 		scheduleOpenCodeGoUsageActivity(s.deferredService, account)
 	}
-	// Capacity shedding describes this request, not account health. Keep the
-	// account schedulable while the request-local retry budget handles recovery.
+	// Capacity shedding describes this request rather than a broken credential, so
+	// the account stays enabled and the request-local retry budget still owns
+	// recovery on the same account. A single shed must therefore change nothing.
+	// Two in a row are a different signal: the selected upstream keeps shedding,
+	// and an operator reads the old no-op behaviour as "the pool never routes
+	// around the failing upstream". Park such an account for a short fixed
+	// cooldown so follow-up requests prefer another account. Pool mode keeps its
+	// documented exemption: one local credential multiplexes many upstream keys
+	// there, so a shed signal says nothing about the account as a whole.
 	if account != nil && account.Platform == PlatformOpenAI && isOpenAIRequestScopedCapacityShed("", responseBody) {
+		if s != nil && s.rateLimitService != nil && !account.IsPoolMode() {
+			if streak, trip := s.recordOpenAICapacityShedFailure(account); trip {
+				stateCtx, cancel := openAIAccountStateContext(ctx)
+				s.rateLimitService.setAccountOverloadCooldown(stateCtx, account, openAICapacityShedCooldown, "capacity_shed")
+				cancel()
+				slog.Warn("openai_capacity_shed_overload_cooldown",
+					"account_id", account.ID,
+					"upstream_status", statusCode,
+					"streak", streak,
+					"cooldown_ms", openAICapacityShedCooldown.Milliseconds(),
+				)
+			}
+		}
 		return false
 	}
 	stateCtx, cancel := openAIAccountStateContext(ctx)

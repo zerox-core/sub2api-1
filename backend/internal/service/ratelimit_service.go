@@ -2002,6 +2002,22 @@ func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
 	slog.Info("account_overloaded", "account_id", account.ID, "until", until)
 }
 
+// setAccountOverloadCooldown 用显式时长给账号打过载冷却，reason 仅用于日志与
+// 事件标注。容量降载这类上游瞬时状态使用固定的短冷却，因此不走 handle529 那条
+// 依赖管理员配置的 529 全局冷却（那是给账号真正过载信号用的）。
+func (s *RateLimitService) setAccountOverloadCooldown(ctx context.Context, account *Account, cooldown time.Duration, reason string) {
+	if account == nil || cooldown <= 0 {
+		return
+	}
+	until := time.Now().Add(cooldown)
+	s.notifyAccountSchedulingBlocked(account, until, reason)
+	if err := s.accountRepo.SetOverloaded(ctx, account.ID, until); err != nil {
+		slog.Warn("overload_set_failed", "account_id", account.ID, "reason", reason, "error", err)
+		return
+	}
+	slog.Info("account_overloaded", "account_id", account.ID, "until", until, "reason", reason)
+}
+
 // UpdateSessionWindow 从成功响应更新5h窗口状态
 func (s *RateLimitService) UpdateSessionWindow(ctx context.Context, account *Account, headers http.Header) {
 	status := headers.Get("anthropic-ratelimit-unified-5h-status")
