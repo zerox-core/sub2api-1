@@ -34,7 +34,7 @@ UPDATE accounts SET extra = jsonb_set(extra, '{openai_responses_supported}', 'fa
 
 ### 另外两条不是我们的问题
 
-- `kimi-k2.5`：**直连上游就是** `HTTP 503 {"code":"model_not_found","message":"No available channel for model kimi-k2.5 under group vip_video (distributor)"}` —— 丽珠侧渠道没开。要么让他们补渠道，要么把这个模型从分组白名单摘掉（否则它一直出现在模型列表里却调不通）。
+- `kimi-k2.5`：**直连上游就是** `HTTP 503 {"code":"model_not_found","message":"No available channel for model kimi-k2.5 under group vip_video (distributor)"}` —— 丽珠侧渠道没开。**已按需求方决定从丽珠组白名单摘掉**（`groups.id=8` 的 `model_allowlist.models` 19 → 18 项，含缓存刷新生效），现在调用得到明确的 `404 model_not_found: Model "kimi-k2.5" is not available for this group`，而不是让用户撞上游 503；等丽珠补了渠道再加回来。
 - `mimo-v2.5-tts`：上游要求 `messages` 含 assistant 角色（TTS 约定），不是故障。
 
 > 结构性风险：丽珠组只绑了账号 40 **一个号**，没有任何备用，上游一坏就是硬失败。
