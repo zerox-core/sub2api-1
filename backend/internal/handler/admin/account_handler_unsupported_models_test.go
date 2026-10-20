@@ -40,8 +40,8 @@ func setupUnsupportedModelsRouter(account *service.Account) (*gin.Engine, *unsup
 
 func unsupportedModelsAccount() *service.Account {
 	return &service.Account{
-		ID:     5,
-		Name:   "zyuou",
+		ID:   5,
+		Name: "zyuou",
 		Extra: map[string]any{
 			service.UnsupportedModelsExtraKey: map[string]any{
 				"gpt-image-1": map[string]any{"status": 404, "count": 2, "reason": "upstream_404_model_not_found"},
@@ -75,7 +75,9 @@ func TestClearUnsupportedModelsReleasesSingleModel(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
 	require.Equal(t, records["gpt-5.4"].Count, 2)
-	require.NotContains(t, payload.Data.Extra[service.UnsupportedModelsExtraKey].(map[string]any), "gpt-image-1")
+	remaining, ok := payload.Data.Extra[service.UnsupportedModelsExtraKey].(map[string]any)
+	require.True(t, ok, "extra.%s 应为对象", service.UnsupportedModelsExtraKey)
+	require.NotContains(t, remaining, "gpt-image-1")
 }
 
 // 放行最后一条时写 nil，让仓储把 extra 里的键删掉，而不是留下空对象。

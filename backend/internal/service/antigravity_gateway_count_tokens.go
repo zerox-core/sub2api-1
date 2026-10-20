@@ -94,16 +94,19 @@ func (s *AntigravityGatewayService) ForwardCountTokens(ctx context.Context, c *g
 		return fmt.Errorf("extract request envelope: %w", err)
 	}
 	inner := gjson.ParseBytes(envelope.Request)
-	countReq := map[string]any{"request": map[string]any{
+	// 用具体类型的变量持有请求体，避免后续对 map[string]any 反复做类型断言
+	// （errcheck 开启 check-type-assertions 后，未校验的断言会被视为潜在 panic）。
+	requestBody := map[string]any{
 		"contents":          inner.Get("contents").Value(),
 		"systemInstruction": inner.Get("systemInstruction").Value(),
 		"tools":             inner.Get("tools").Value(),
 		"generationConfig":  inner.Get("generationConfig").Value(),
-	}}
+	}
+	countReq := map[string]any{"request": requestBody}
 	// 仅在有值时携带，避免 null 字段
-	for k, v := range countReq["request"].(map[string]any) {
+	for k, v := range requestBody {
 		if v == nil {
-			delete(countReq["request"].(map[string]any), k)
+			delete(requestBody, k)
 		}
 	}
 	wireBody, err := json.Marshal(countReq)
@@ -226,15 +229,16 @@ func (s *AntigravityGatewayService) antigravityCountTokensFromGemini(ctx context
 
 	// 按 CPA 语义裁剪：去除 model/project/safetySettings/toolConfig/labels/sessionId
 	inner := gjson.ParseBytes(body)
-	countReq := map[string]any{"request": map[string]any{
+	requestBody := map[string]any{
 		"contents":          inner.Get("contents").Value(),
 		"systemInstruction": inner.Get("systemInstruction").Value(),
 		"tools":             inner.Get("tools").Value(),
 		"generationConfig":  inner.Get("generationConfig").Value(),
-	}}
-	for k, v := range countReq["request"].(map[string]any) {
+	}
+	countReq := map[string]any{"request": requestBody}
+	for k, v := range requestBody {
 		if v == nil {
-			delete(countReq["request"].(map[string]any), k)
+			delete(requestBody, k)
 		}
 	}
 	wireBody, err := json.Marshal(countReq)
