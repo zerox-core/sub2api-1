@@ -2,6 +2,7 @@ package service
 
 import (
 	"math"
+	"strconv"
 	"strings"
 )
 
@@ -13,6 +14,9 @@ import (
 //
 // 缺省值为 0 保证所有存量账号行为与引入该字段前完全一致。
 const OpenAISchedulerTierExtraKey = "scheduler_tier"
+
+// maxOpenAISchedulerTier 限制层级上界，保证分层下探的循环次数有界。
+const maxOpenAISchedulerTier = 8
 
 // openAIAccountSchedulingTier 读取账号的调度层级。
 //
@@ -37,9 +41,6 @@ func openAIAccountSchedulingTier(account *Account) int {
 	}
 	return tier
 }
-
-// maxOpenAISchedulerTier 限制层级上界，保证分层下探的循环次数有界。
-const maxOpenAISchedulerTier = 8
 
 // partitionOpenAIAccountsBySchedulingTier 把账号按调度层级切分为有序分组。
 //
@@ -91,42 +92,13 @@ func describeOpenAISchedulerTierPool(groups [][]*Account) string {
 	if len(groups) == 0 {
 		return ""
 	}
-	var builder strings.Builder
-	for i, group := range groups {
-		if i > 0 {
-			builder.WriteByte(',')
-		}
+	parts := make([]string, 0, len(groups))
+	for _, group := range groups {
 		tier := 0
 		if len(group) > 0 {
 			tier = openAIAccountSchedulingTier(group[0])
 		}
-		builder.WriteString(itoaOpenAITier(tier))
-		builder.WriteByte(':')
-		builder.WriteString(itoaOpenAITier(len(group)))
+		parts = append(parts, strconv.Itoa(tier)+":"+strconv.Itoa(len(group)))
 	}
-	return builder.String()
-}
-
-// itoaOpenAITier 是一个不依赖 strconv 导入的极小整数格式化，避免与
-// 同包内其他文件的导入产生耦合。
-func itoaOpenAITier(value int) string {
-	if value == 0 {
-		return "0"
-	}
-	negative := value < 0
-	if negative {
-		value = -value
-	}
-	var buf [20]byte
-	pos := len(buf)
-	for value > 0 {
-		pos--
-		buf[pos] = byte('0' + value%10)
-		value /= 10
-	}
-	if negative {
-		pos--
-		buf[pos] = '-'
-	}
-	return string(buf[pos:])
+	return strings.Join(parts, ",")
 }
