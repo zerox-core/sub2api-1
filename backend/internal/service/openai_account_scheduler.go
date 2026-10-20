@@ -1493,6 +1493,27 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		}
 	}
 
+	// 调度层级：主用层（tier 0）优先，拿不到并发槽位时才下探托底层（tier > 0）。
+	// 未配置 scheduler_tier 的分组只有单层，直接走原有路径，行为与引入该特性前
+	// 完全一致。
+	tierGroups := partitionOpenAIAccountsBySchedulingTier(filtered)
+	if len(tierGroups) > 1 {
+		return s.selectByLoadBalanceAcrossTiers(ctx, req, tierGroups, loadMap, filterStats)
+	}
+
+	return s.selectByLoadBalanceWithinPool(ctx, req, filtered, loadMap, budget, filterStats)
+}
+
+// selectByLoadBalanceWithinPool 在单个账号池内完成一次完整选号（含订阅优先分支
+// 与排队回退）。
+func (s *defaultOpenAIAccountScheduler) selectByLoadBalanceWithinPool(
+	ctx context.Context,
+	req OpenAIAccountScheduleRequest,
+	filtered []*Account,
+	loadMap map[int64]*AccountLoadInfo,
+	budget *openAISelectionProbeBudget,
+	filterStats openAISelectionFilterStats,
+) (*AccountSelectionResult, int, int, float64, error) {
 	if req.SubscriptionPriority {
 		subscriptionAccounts, regularAccounts := partitionOpenAIChatGPTSubscriptionAccounts(filtered)
 		if len(subscriptionAccounts) > 0 {
@@ -1541,6 +1562,67 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		return attempt.result, attempt.candidateCount, attempt.topK, attempt.loadSkew, nil
 	}
 	return s.finishLoadBalanceSelectionFallback(ctx, req, attempt, budget, filterStats)
+}
+
+// selectByLoadBalanceAcrossTiers 实现分层下探：先只在最小层级（主用层）内选号，
+// 仅当主用层无法真正拿到并发槽位时才逐层下探到托底层。
+//
+// 关键语义：
+//   - 只有"真实拿到并发槽位"（Acquired）才算该层选号成功，托底号不会被无谓消耗。
+//   - 某层只能排队（WaitPlan）时视为"拿不到槽位"，继续下探下一层；若所有层级都
+//     只能排队，则回退到靠前层级的等待计划，避免把本可排队的请求硬失败。
+//   - 所有层级都失败时才返回错误。
+func (s *defaultOpenAIAccountScheduler) selectByLoadBalanceAcrossTiers(
+	ctx context.Context,
+	req OpenAIAccountScheduleRequest,
+	tierGroups [][]*Account,
+	loadMap map[int64]*AccountLoadInfo,
+	filterStats openAISelectionFilterStats,
+) (*AccountSelectionResult, int, int, float64, error) {
+	var (
+		waitPlanResult *AccountSelectionResult
+		candidateCount int
+		topK           int
+		loadSkew       float64
+		lastErr        error
+	)
+	for tierIndex, pool := range tierGroups {
+		if len(pool) == 0 {
+			continue
+		}
+		// 每层独立预算：主用层探测耗尽的预算不应剥夺托底层的选号机会。
+		budget := newOpenAISelectionProbeBudget()
+		result, count, k, skew, err := s.selectByLoadBalanceWithinPool(ctx, req, pool, loadMap, budget, filterStats)
+		if count > candidateCount {
+			candidateCount = count
+			topK = k
+			loadSkew = skew
+		}
+		if err == nil && result != nil && result.Acquired {
+			if tierIndex > 0 {
+				slog.Info("openai_scheduler_tier_spill",
+					"group_id", derefGroupID(req.GroupID),
+					"model", req.RequestedModel,
+					"tier", openAIAccountSchedulingTier(result.Account),
+					"account_id", result.Account.ID,
+					"tier_pool", describeOpenAISchedulerTierPool(tierGroups),
+				)
+			}
+			return result, candidateCount, topK, loadSkew, nil
+		}
+		// 可排队结果不是"拿到槽位"，但优于硬失败：记下首个等待计划作为最终兜底。
+		if err == nil && result != nil && result.WaitPlan != nil && waitPlanResult == nil {
+			waitPlanResult = result
+		}
+		if err != nil && lastErr == nil {
+			lastErr = err
+		}
+	}
+	if waitPlanResult != nil {
+		// 在任何层级排队，都好过直接失败。
+		return waitPlanResult, candidateCount, topK, loadSkew, nil
+	}
+	return nil, candidateCount, topK, loadSkew, lastErr
 }
 
 func partitionOpenAIChatGPTSubscriptionAccounts(accounts []*Account) ([]*Account, []*Account) {
