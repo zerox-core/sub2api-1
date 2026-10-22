@@ -1635,31 +1635,42 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 	canonicalModel ...string,
 ) (int, bool) {
 	statusCode := openAIStreamFailureStatus(payload, message)
-	switch statusCode {
-	case http.StatusForbidden:
+	// 容量降载（"Our servers are currently overloaded" / server_is_overloaded）在生产
+	// 里的真实形态是「HTTP 200 + 流内 response.failed」，语义状态是 503。它不禁用账号，
+	// 但必须走同一套账号记账：否则 recordOpenAICapacityShedFailure 永远不会被流式路径
+	// 触发，"连续两次降载 → 2 分钟过载冷却" 只对非流式 503 生效，而 Codex/Responses 的
+	// 主路径全是流式，调度器于是会反复重新选中同一个正在降载的上游。HTTP 非 2xx 与 WS
+	// 路径早已走 handleOpenAIAccountUpstreamError（openAIWSPayloadTransientStatus 对
+	// server_is_overloaded/slow_down 同样返回 503），这里补齐 SSE 两条路径的一致性。
+	capacityShed := statusCode == http.StatusServiceUnavailable && isOpenAIUpstreamCapacityShedEvent(payload)
+	applyAccountState := capacityShed ||
+		statusCode == http.StatusUnauthorized ||
+		statusCode == http.StatusTooManyRequests ||
+		statusCode == 529
+	if statusCode == http.StatusForbidden {
 		if !openAIStream403AccountFailure(payload, message) {
 			return statusCode, false
 		}
-		fallthrough
-	case http.StatusUnauthorized, http.StatusTooManyRequests, 529:
-		ctx := context.Background()
-		if c != nil && c.Request != nil {
-			ctx = c.Request.Context()
-		}
-		model := firstNonEmpty(canonicalModel...)
-		if model == "" {
-			model = firstNonEmpty(gjson.GetBytes(payload, "model").String(), gjson.GetBytes(payload, "response.model").String())
-		}
-		accountHeaders := headers
-		if statusCode == http.StatusTooManyRequests {
-			// 普通模型的流式 429 不能继承外层 HTTP 200 的全局 quota 快照；
-			// 只有 OAuth/SetupToken 的 Spark 配额 429 才需要保留 headers 读取明确的 5h/7d reset。
-			accountHeaders = openAIWSSemantic429Headers(account, model, headers)
-		}
-		return statusCode, s.handleOpenAIAccountUpstreamError(ctx, account, statusCode, accountHeaders, payload, model)
-	default:
+		applyAccountState = true
+	}
+	if !applyAccountState {
 		return statusCode, false
 	}
+	ctx := context.Background()
+	if c != nil && c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	model := firstNonEmpty(canonicalModel...)
+	if model == "" {
+		model = firstNonEmpty(gjson.GetBytes(payload, "model").String(), gjson.GetBytes(payload, "response.model").String())
+	}
+	accountHeaders := headers
+	if statusCode == http.StatusTooManyRequests {
+		// 普通模型的流式 429 不能继承外层 HTTP 200 的全局 quota 快照；
+		// 只有 OAuth/SetupToken 的 Spark 配额 429 才需要保留 headers 读取明确的 5h/7d reset。
+		accountHeaders = openAIWSSemantic429Headers(account, model, headers)
+	}
+	return statusCode, s.handleOpenAIAccountUpstreamError(ctx, account, statusCode, accountHeaders, payload, model)
 }
 
 func openAIStreamFailedEventRetryableOnSameAccount(account *Account, payload []byte, message string) bool {
