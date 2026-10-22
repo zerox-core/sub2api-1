@@ -359,6 +359,9 @@ func newOpenAIUpstreamFailoverError(
 		// retries are exhausted, but expose it as a retryable server_error.
 		failoverErr.ClientStatusCode = http.StatusServiceUnavailable
 		failoverErr.ClientMessage = openAICapacityShedClientMessage(upstreamMsg, responseBody)
+		// 容量降载只保留一次同账号确认重试，随后交给 failover 换号：把默认 3 次预算
+		// 耗在一个正在降载的上游上只会推迟首字，换到独立账号/渠道才有机会命中空闲容量。
+		failoverErr.SameAccountRetryMax = openAICapacityShedSameAccountRetryMax
 	}
 	return failoverErr
 }

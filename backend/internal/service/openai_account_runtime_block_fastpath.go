@@ -90,6 +90,44 @@ func isOpenAIAccount(account *Account) bool {
 	return account != nil && (account.Platform == PlatformOpenAI || account.Platform == PlatformGrok)
 }
 
+// capacityShedCooldownKeepsPoolServable 报告把该账号移出轮换后，它所属的每个分组
+// 是否都还留有别的可调度账号。
+//
+// 生产里存在只有单个可调度账号的分组（生图、语音、国模、兜底专用、WorkBuddy 直连
+// 等专用组）：把唯一账号打过载冷却，等于让整组在两分钟内直接回 503
+// "No available accounts"，而降载往往只是秒级抖动，冷却的收益远小于这次可用性损失。
+// 只要有一个分组会因此变空，就跳过冷却——该账号仍是那个池子唯一的出口，继续用它
+// 比空池更合理。
+//
+// 信息缺失（调度快照未启用 / 账号没有分组归属）时 fail-open 返回 true，保持原有的
+// 冷却语义，避免在拿不到数据时改变行为。单个分组查询失败同样按可冷却处理。
+func (s *OpenAIGatewayService) capacityShedCooldownKeepsPoolServable(ctx context.Context, account *Account) bool {
+	if s == nil || account == nil || s.schedulerSnapshot == nil || len(account.GroupIDs) == 0 {
+		return true
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for _, gid := range account.GroupIDs {
+		groupID := gid
+		accounts, _, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, &groupID, account.Platform, false)
+		if err != nil {
+			continue
+		}
+		hasOther := false
+		for i := range accounts {
+			if accounts[i].ID != account.ID {
+				hasOther = true
+				break
+			}
+		}
+		if !hasOther {
+			return false
+		}
+	}
+	return true
+}
+
 // handleOpenAIAccountUpstreamError expects canonicalModel to be the model used
 // for scheduling after applying account mapping exactly once.
 func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, canonicalModel ...string) bool {
@@ -113,15 +151,25 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if account != nil && account.Platform == PlatformOpenAI && isOpenAIRequestScopedCapacityShed("", responseBody) {
 		if s != nil && s.rateLimitService != nil && !account.IsPoolMode() {
 			if streak, trip := s.recordOpenAICapacityShedFailure(account); trip {
-				stateCtx, cancel := openAIAccountStateContext(ctx)
-				s.rateLimitService.setAccountOverloadCooldown(stateCtx, account, openAICapacityShedCooldown, "capacity_shed")
-				cancel()
-				slog.Warn("openai_capacity_shed_overload_cooldown",
-					"account_id", account.ID,
-					"upstream_status", statusCode,
-					"streak", streak,
-					"cooldown_ms", openAICapacityShedCooldown.Milliseconds(),
-				)
+				if !s.capacityShedCooldownKeepsPoolServable(ctx, account) {
+					// 该账号是它所在某个分组的唯一出口：冷却会让那个分组在 2 分钟内
+					// 直接回 No available accounts，比继续用一个抖动中的账号更糟。
+					slog.Warn("openai_capacity_shed_cooldown_skipped_sole_candidate",
+						"account_id", account.ID,
+						"upstream_status", statusCode,
+						"streak", streak,
+					)
+				} else {
+					stateCtx, cancel := openAIAccountStateContext(ctx)
+					s.rateLimitService.setAccountOverloadCooldown(stateCtx, account, openAICapacityShedCooldown, "capacity_shed")
+					cancel()
+					slog.Warn("openai_capacity_shed_overload_cooldown",
+						"account_id", account.ID,
+						"upstream_status", statusCode,
+						"streak", streak,
+						"cooldown_ms", openAICapacityShedCooldown.Milliseconds(),
+					)
+				}
 			}
 		}
 		return false

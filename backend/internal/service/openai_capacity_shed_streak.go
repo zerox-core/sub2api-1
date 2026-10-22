@@ -15,6 +15,12 @@ const (
 	// 触发后的冷却时长。刻意取短：降载是上游瞬时状态，账号本身没坏。
 	openAICapacityShedCooldown   = 2 * time.Minute
 	openAICapacityShedMaxEntries = 4096
+	// 容量降载的同账号重试上限：只做一次即时确认重试，随后立刻换账号/渠道。
+	// 降到 1 的理由是首字延迟：默认预算 3 次在请求级瞬时错误下按 500ms/1s/2s 退避，
+	// 等于先在被降载的上游上耗掉约 3.5 秒才轮到同组其他账号；而降载本身是上游容量
+	// 问题，同一账号在几秒内几乎必然再次降载，只有换号（独立账号/渠道的容量互不相干）
+	// 才有机会立刻拿到首字。语义不变：仍然是"先在同账号上有界重试，再切号"。
+	openAICapacityShedSameAccountRetryMax = 1
 )
 
 type openAICapacityShedEntry struct {

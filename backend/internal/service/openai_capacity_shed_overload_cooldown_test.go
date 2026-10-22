@@ -132,3 +132,63 @@ func TestCapacityShedStreakWindowExpires(t *testing.T) {
 		t.Fatal("窗口内的第二次降载应触发")
 	}
 }
+
+// 回归：生产里的真实降载形态是「HTTP 200 + 流内 response.failed」，走的是
+// handleOpenAIStreamTerminalAccountSideEffects。该函数此前只把 401/403/429/529
+// 交给 handleOpenAIAccountUpstreamError，503 掉进 default 直接返回，
+// 于是 recordOpenAICapacityShedFailure 永远无法被流式路径触发——连续降载冷却
+// 只对非流式 503 生效，流式请求（Codex/Responses 主路径）仍会反复命中同一降载上游。
+func TestOpenAIStreamCapacityShedCountsTowardCooldownStreak(t *testing.T) {
+	repo := &capacityShedCooldownRepo{}
+	svc := newCapacityShedService(repo)
+	account := &Account{ID: 6210, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	payload := []byte(capacityShedPayload)
+	message := "Our servers are currently overloaded. Please try again later."
+
+	status, disabled := svc.handleOpenAIStreamTerminalAccountSideEffects(nil, account, payload, message, nil)
+	require.Equal(t, http.StatusServiceUnavailable, status)
+	require.False(t, disabled)
+	require.Zero(t, repo.overloadCalls, "单次流式降载仍不改变调度")
+
+	status, disabled = svc.handleOpenAIStreamTerminalAccountSideEffects(nil, account, payload, message, nil)
+	require.Equal(t, http.StatusServiceUnavailable, status)
+	require.False(t, disabled)
+	require.Equal(t, 1, repo.overloadCalls, "流式路径的连续第二次降载必须把账号移出轮换")
+	require.Equal(t, int64(6210), repo.lastOverloadID)
+	require.WithinDuration(t, time.Now().Add(openAICapacityShedCooldown), repo.lastOverloadEnd, 3*time.Second)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account), "冷却不是禁用")
+}
+
+// 非降载的流内 failed（语义 502）不得顺手触发账号级过载冷却。
+func TestOpenAIStreamNonCapacityFailedDoesNotTouchScheduling(t *testing.T) {
+	repo := &capacityShedCooldownRepo{}
+	svc := newCapacityShedService(repo)
+	account := &Account{ID: 6211, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	payload := []byte(`{"type":"response.failed","response":{"status":"failed","error":{"message":"upstream is having a bad time"}}}`)
+
+	for range 2 {
+		status, disabled := svc.handleOpenAIStreamTerminalAccountSideEffects(nil, account, payload, "upstream is having a bad time", nil)
+		require.Equal(t, http.StatusBadGateway, status)
+		require.False(t, disabled)
+	}
+
+	require.Zero(t, repo.overloadCalls, "非容量类 failed 不应写入账号调度状态")
+}
+
+// 容量降载的同账号重试预算收窄为 1：确认一次后立即换号，避免在被降载的上游上
+// 按 500ms/1s/2s 退避耗掉数秒首字延迟；RetryableOnSameAccount 仍为 true。
+func TestCapacityShedFailoverErrorCapsSameAccountRetry(t *testing.T) {
+	failoverErr := newOpenAIUpstreamFailoverError(
+		http.StatusServiceUnavailable,
+		nil,
+		[]byte(capacityShedPayload),
+		"Our servers are currently overloaded. Please try again later.",
+		false,
+	)
+
+	require.True(t, failoverErr.IsOpenAICapacityShed())
+	require.True(t, failoverErr.RetryableOnSameAccount, "仍保留一次同账号确认重试")
+	require.Equal(t, openAICapacityShedSameAccountRetryMax, failoverErr.SameAccountRetryMax)
+	require.Equal(t, 1, failoverErr.SameAccountRetryMax)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.ClientStatusCode)
+}
