@@ -166,7 +166,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesDashScopeNative(
 	}
 
 	requestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
-	openAIBody := nativeBody
+	// openAIBody 在下面两个分支里都会被赋值，这里只声明不初始化，
+	// 避免留下一个必然被覆盖的死赋值（ineffassign）。
+	var openAIBody []byte
 	if resp.StatusCode >= 400 {
 		openAIBody = dashScopeNativeErrorBodyToOpenAI(nativeBody)
 	} else if converted, convErr := dashScopeNativeImageBodyToOpenAI(nativeBody); convErr != nil {

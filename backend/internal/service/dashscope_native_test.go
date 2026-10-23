@@ -72,15 +72,22 @@ func TestBuildDashScopeNativeImagesPayload(t *testing.T) {
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
 	require.Equal(t, "qwen-image-2.0", payload["model"])
-	input := payload["input"].(map[string]any)
-	messages := input["messages"].([]any)
+	input, ok := payload["input"].(map[string]any)
+	require.True(t, ok, "input 应为对象")
+	messages, ok := input["messages"].([]any)
+	require.True(t, ok, "input.messages 应为数组")
 	require.Len(t, messages, 1)
-	message := messages[0].(map[string]any)
+	message, ok := messages[0].(map[string]any)
+	require.True(t, ok, "messages[0] 应为对象")
 	require.Equal(t, "user", message["role"])
-	content := message["content"].([]any)
+	content, ok := message["content"].([]any)
+	require.True(t, ok, "message.content 应为数组")
 	require.Len(t, content, 1)
-	require.Equal(t, "a red apple", content[0].(map[string]any)["text"])
-	parameters := payload["parameters"].(map[string]any)
+	firstContent, ok := content[0].(map[string]any)
+	require.True(t, ok, "content[0] 应为对象")
+	require.Equal(t, "a red apple", firstContent["text"])
+	parameters, ok := payload["parameters"].(map[string]any)
+	require.True(t, ok, "parameters 应为对象")
 	// OpenAI 的 1024x1024 必须写成百炼要求的 1024*1024
 	require.Equal(t, "1024*1024", parameters["size"])
 	_, hasN := parameters["n"]
@@ -98,10 +105,22 @@ func TestBuildDashScopeNativeImagesPayloadWithUpload(t *testing.T) {
 	require.NoError(t, err)
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
-	content := payload["input"].(map[string]any)["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	input, ok := payload["input"].(map[string]any)
+	require.True(t, ok, "input 应为对象")
+	messages, ok := input["messages"].([]any)
+	require.True(t, ok, "input.messages 应为数组")
+	require.NotEmpty(t, messages)
+	message, ok := messages[0].(map[string]any)
+	require.True(t, ok, "messages[0] 应为对象")
+	content, ok := message["content"].([]any)
+	require.True(t, ok, "message.content 应为数组")
 	require.Len(t, content, 2)
-	require.Equal(t, "data:image/png;base64,AQID", content[0].(map[string]any)["image"])
-	require.Equal(t, "make it blue", content[1].(map[string]any)["text"])
+	imagePart, ok := content[0].(map[string]any)
+	require.True(t, ok, "content[0] 应为对象")
+	require.Equal(t, "data:image/png;base64,AQID", imagePart["image"])
+	textPart, ok := content[1].(map[string]any)
+	require.True(t, ok, "content[1] 应为对象")
+	require.Equal(t, "make it blue", textPart["text"])
 }
 
 func TestBuildDashScopeNativeImagesPayloadRequiresInput(t *testing.T) {
@@ -139,7 +158,8 @@ func TestDashScopeNativeErrorBodyToOpenAI(t *testing.T) {
 	out := dashScopeNativeErrorBodyToOpenAI([]byte(`{"code":"InvalidParameter","message":"url error","request_id":"r1"}`))
 	var parsed map[string]any
 	require.NoError(t, json.Unmarshal(out, &parsed))
-	errObj := parsed["error"].(map[string]any)
+	errObj, ok := parsed["error"].(map[string]any)
+	require.True(t, ok, "error 应为对象")
 	require.Equal(t, "url error", errObj["message"])
 	require.Equal(t, "InvalidParameter", errObj["code"])
 }
@@ -176,10 +196,11 @@ func TestDashScopeTTSTextFromBody(t *testing.T) {
 func buildTestPCMWAV(sampleRate, channels int, samples []int16) []byte {
 	var buf bytes.Buffer
 	dataLen := len(samples) * 2
-	buf.WriteString("RIFF")
+	// bytes.Buffer 的写方法永不返回非 nil error，显式丢弃以满足 errcheck。
+	_, _ = buf.WriteString("RIFF")
 	_ = binary.Write(&buf, binary.LittleEndian, uint32(36+dataLen))
-	buf.WriteString("WAVE")
-	buf.WriteString("fmt ")
+	_, _ = buf.WriteString("WAVE")
+	_, _ = buf.WriteString("fmt ")
 	_ = binary.Write(&buf, binary.LittleEndian, uint32(16))
 	_ = binary.Write(&buf, binary.LittleEndian, uint16(1))
 	_ = binary.Write(&buf, binary.LittleEndian, uint16(channels))
@@ -187,7 +208,7 @@ func buildTestPCMWAV(sampleRate, channels int, samples []int16) []byte {
 	_ = binary.Write(&buf, binary.LittleEndian, uint32(sampleRate*channels*2))
 	_ = binary.Write(&buf, binary.LittleEndian, uint16(channels*2))
 	_ = binary.Write(&buf, binary.LittleEndian, uint16(16))
-	buf.WriteString("data")
+	_, _ = buf.WriteString("data")
 	_ = binary.Write(&buf, binary.LittleEndian, uint32(dataLen))
 	for _, sample := range samples {
 		_ = binary.Write(&buf, binary.LittleEndian, sample)
