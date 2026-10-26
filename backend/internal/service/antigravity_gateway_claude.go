@@ -50,6 +50,11 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	// Antigravity 上游只认 base64 内联图片：客户端传 http(s) 直链时先下载转 base64。
 	antigravity.ResolveRemoteImageSources(ctx, &claudeReq)
 
+	// 稳定隐式缓存前缀：归一化历史消息 <system-reminder> 块内的日期/时间等易变字段。
+	// 上游按前缀逐字节匹配缓存，历史块里的一处时间戳变化就会让整段上下文 miss。
+	// 只处理历史消息，当前轮（最后一条）保持原样。
+	antigravity.NormalizeHistoricalReminders(&claudeReq)
+
 	originalModel := claudeReq.Model
 	mappedModel := s.getMappedModelForThinkingLevel(
 		account,
