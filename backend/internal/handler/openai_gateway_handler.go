@@ -655,6 +655,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 复用前置权限与并发阶段在未修改 body 上确认的显式生图意图，避免大 tools 请求重复扫描。
 	// 该判断已排除 Codex 被动 image_gen namespace，避免 CC-only 账号被误过滤（#4476）。
 	needsResponses := nativeV2 || legacyCompact
+	// gpt-6.1-sol 的 Chat Completions 端点不接受工具调用：带工具的请求必须由
+	// Responses 能力账号承接，否则会落到只支持 Chat 的账号并在转发层报错。
+	if requiresResponsesForGPT61SolToolRequest(reqModel, body) {
+		needsResponses = true
+	}
 	requiredCapability := openAIResponsesRequiredCapabilityForRequest(imageIntent, needsResponses, requestPlatform)
 
 	// 分组利润控制：请求级装配定价上下文——pricingAt 固定本请求的
@@ -1221,8 +1226,20 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	routingModel := service.NormalizeOpenAICompatRequestedModel(reqModel)
 	preferredMappedModel := resolveOpenAIMessagesDispatchMappedModel(c, apiKey, reqModel)
 	reqStream := gjson.GetBytes(body, "stream").Bool()
+	requiredCapability := service.OpenAIEndpointCapabilityChatCompletions
+	thinkingEnabled := strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()), "enabled") ||
+		strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()), "adaptive")
+	if requiresResponsesForAnthropicToolRequest(reqModel, body, thinkingEnabled) {
+		requiredCapability = service.OpenAIEndpointCapabilityResponses
+	}
 
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
+	if requiredCapability == service.OpenAIEndpointCapabilityResponses {
+		reqLog.Info("openai_messages.responses_capability_required",
+			zap.String("model", reqModel),
+			zap.String("capability", string(requiredCapability)),
+		)
+	}
 
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
@@ -1314,7 +1331,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			currentRoutingModel,
 			failedAccountIDs,
 			service.OpenAIUpstreamTransportAny,
-			service.OpenAIEndpointCapabilityChatCompletions,
+			requiredCapability,
 			false,
 			false,
 			true,
