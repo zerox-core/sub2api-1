@@ -1348,6 +1348,11 @@ func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
 	if account == nil || account.Type != AccountTypeAPIKey {
 		return false
 	}
+	// 显式运维开关优先于一切按模型分流/探针判定：上游 /v1/responses 被 WAF 拦截
+	// 时（403 + HTML），只能整体改走 Chat Completions 出口。
+	if account.ForcesResponsesChatFallback() {
+		return true
+	}
 	if account.routesByModel() {
 		// Model protocol_rules are the authority. Probe Extra must not collapse
 		// Grok/GPT/Muse into Chat Completions.

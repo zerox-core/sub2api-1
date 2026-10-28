@@ -662,6 +662,12 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 	if len(result) > 0 {
 		if a.Platform == domain.PlatformAntigravity {
 			ensureAntigravityDefaultPassthroughs(result, []string{
+				"gemini-4-argon-low",
+				"gemini-4-argon-medium",
+				"claude-opus-5-5",
+				"claude-opus-5-5-medium",
+				"claude-sonnet-5-5",
+				"claude-sonnet-5-5-medium",
 				"gemini-3-flash",
 				"gemini-3.1-pro-high",
 				"gemini-3.1-pro-low",
@@ -2249,6 +2255,30 @@ func (a *Account) IsOpenAIResponsesFlattenNamespacesEnabled() bool {
 		return false
 	}
 	enabled, ok := a.Extra["openai_responses_flatten_namespaces"].(bool)
+	return ok && enabled
+}
+
+// OpenAIResponsesChatFallbackExtraKey 是账号级「Responses 入站强制降级为上游
+// /v1/chat/completions」开关的 extra 键。
+//
+// 用于上游 /v1/responses 不可靠的场景：部分中转上游（如挂了 WAF 的网关）会对
+// 请求体里出现 SQL/XSS 特征串的 Responses 请求直接返回 403 + HTML 错误页，
+// 而同一份内容走 /v1/chat/completions 完全正常。这类拦截与密钥、余额、并发
+// 无关，换账号也无法规避，只能改走 Chat Completions 出口。
+//
+// 之所以单独开一个键而不是复用 openai_responses_supported：后者由异步探针写入，
+// 管理员在 UI 编辑账号会重新触发探测并把它改回 true，配置会被静默覆盖。
+const OpenAIResponsesChatFallbackExtraKey = "openai_responses_chat_fallback"
+
+// ForcesResponsesChatFallback 报告该账号是否被显式配置为强制 Chat Completions
+// 降级。字段：accounts.extra.openai_responses_chat_fallback；缺失或非 bool 时按
+// false 处理。仅对 OpenAI API Key 账号生效（见
+// shouldForwardOpenAIResponsesViaRawChatCompletions）。
+func (a *Account) ForcesResponsesChatFallback() bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra[OpenAIResponsesChatFallbackExtraKey].(bool)
 	return ok && enabled
 }
 
