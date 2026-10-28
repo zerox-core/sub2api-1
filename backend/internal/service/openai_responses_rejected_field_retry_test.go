@@ -101,6 +101,35 @@ func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyRejectsAmbiguousErrors(t 
 	}
 }
 
+func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyRemovesOnlyRejectedOptionalFields(t *testing.T) {
+	body := []byte(`{"reasoning":{"summary":"remove","content":[{"summary":"keep"}]},"text":{"verbosity":"remove","format":{"verbosity":"keep"}},"input":[{"summary":"keep"}],"tools":[{"parameters":{"properties":{"summary":{"type":"string"},"verbosity":{"type":"string"}}}}]}`)
+
+	retryBody, reason, changed, err := normalizeOpenAIResponsesRejectedFieldRetryBody(http.StatusBadRequest, body, []byte(`{"error":{"code":"invalid_request_error","message":"json: unknown field \"summary\""}}`))
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "reasoning.summary field rejection", reason)
+	require.False(t, gjson.GetBytes(retryBody, "reasoning.summary").Exists())
+	require.True(t, gjson.GetBytes(retryBody, "reasoning.content.0.summary").Exists())
+	require.True(t, gjson.GetBytes(retryBody, "input.0.summary").Exists())
+	require.True(t, gjson.GetBytes(retryBody, "tools.0.parameters.properties.summary").Exists())
+
+	retryBody, reason, changed, err = normalizeOpenAIResponsesRejectedFieldRetryBody(http.StatusBadRequest, retryBody, []byte(`{"error":{"code":"invalid_request_error","message":"json: unknown field \"verbosity\""}}`))
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "text.verbosity field rejection", reason)
+	require.False(t, gjson.GetBytes(retryBody, "text.verbosity").Exists())
+	require.True(t, gjson.GetBytes(retryBody, "text.format.verbosity").Exists())
+	require.True(t, gjson.GetBytes(retryBody, "tools.0.parameters.properties.verbosity").Exists())
+}
+
+func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyIgnoresUnknownFieldWithoutTarget(t *testing.T) {
+	body := []byte(`{"reasoning":{"summary":"keep"},"text":{"verbosity":"keep"}}`)
+	retryBody, _, changed, err := normalizeOpenAIResponsesRejectedFieldRetryBody(http.StatusBadRequest, body, []byte(`{"error":{"code":"invalid_request_error","message":"json: unknown field \"other\""}}`))
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Nil(t, retryBody)
+}
+
 func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyRepairsAutomationMissingRootType(t *testing.T) {
 	body := []byte(`{"tools":[{"type":"function","name":"automation_update","parameters":{"oneOf":[{"type":"object"},{"type":"object","properties":{}}]}}]}`)
 	responseBody := []byte(`{"error":{"code":"invalid_function_parameters","message":"Invalid schema for function 'automation_update': got 'type: \"None\"'.","param":"tools[0].parameters"}}`)

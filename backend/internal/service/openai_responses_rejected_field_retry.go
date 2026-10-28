@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -22,12 +24,183 @@ var (
 	openAIResponsesRejectedContentParamPattern    = regexp.MustCompile(`(?i)^input\[(\d+)\]\.content$`)
 	openAIResponsesRejectedCacheParamPattern      = regexp.MustCompile(`(?i)^input\[(\d+)\]\.prompt_cache_breakpoint$`)
 	openAIResponsesRejectedMessageParamPattern    = regexp.MustCompile(`(?i)(?:unknown|unsupported)[ _-]+parameter\s*(?::|=|is)?\s*["']?(max_output_tokens|truncation|input\[\d+\]\.(?:namespace|status))(?:["']|\b)`)
+	openAIResponsesGoUnknownFieldPattern          = regexp.MustCompile(`(?i)json:\s*unknown field\s+["'](summary|verbosity)["']`)
 	openAIResponsesInvalidTypeMessageParamPattern = regexp.MustCompile(`(?i)invalid[ _-]+type\s+for\s+["']?(input\[\d+\]\.content)(?:["']|\b)[^\n]*\b(?:got|received)\s+null\b`)
 	openAIResponsesMaxZeroContentMessagePattern   = regexp.MustCompile(`(?i)invalid\s+["']?(input\[\d+\]\.content)["']?\s*:\s*array too long\.[^\n]*maximum length 0\b`)
 	openAIResponsesCacheModelRejectionPattern     = regexp.MustCompile(`(?i)["']?(prompt_cache_breakpoint|input\[\d+\]\.prompt_cache_breakpoint)["']?\s+is\s+not\s+supported\s+on\s+this\s+model\b`)
 	openAIResponsesToolParametersParamPattern     = regexp.MustCompile(`(?i)^(?:tools|input)\[\d+\](?:\.tools\[\d+\])*(?:\.function)?\.parameters$`)
 	openAIResponsesMissingSchemaTypePattern       = regexp.MustCompile(`(?i)\bgot\s+["']?type\s*:\s*["']?none["']?`)
 )
+
+// openAIResponsesLearnedFieldTTL bounds how long a learned rejection is
+// trusted. The value is deliberately short: the only cost of a stale entry is
+// that we keep omitting two optional fields the upstream once rejected, while
+// the benefit is that a recovered upstream starts receiving them again soon.
+const openAIResponsesLearnedFieldTTL = 30 * time.Minute
+
+// openAIResponsesLearnedOptionalFields maps the rejected field name reported by
+// an upstream to the exact top-level Responses path we are allowed to drop.
+// Only fields that are purely optional are listed here, so proactive stripping
+// can never remove required request structure.
+var openAIResponsesLearnedOptionalFields = map[string]string{
+	"summary":   "reasoning.summary",
+	"verbosity": "text.verbosity",
+}
+
+type openAIResponsesLearnedFieldKey struct {
+	AccountID int64
+	Model     string
+}
+
+type openAIResponsesLearnedFieldEntry struct {
+	params    map[string]struct{}
+	expiresAt time.Time
+}
+
+// openAIResponsesLearnedFieldStore remembers, per account and upstream model,
+// which optional Responses fields that upstream is known to reject. Recording is
+// only ever driven by an explicit field rejection, and applying a record only
+// ever deletes optional fields, so a learned entry cannot turn a successful
+// request into a failing one.
+type openAIResponsesLearnedFieldStore struct {
+	mu      sync.Mutex
+	entries map[openAIResponsesLearnedFieldKey]openAIResponsesLearnedFieldEntry
+	ttl     time.Duration
+	now     func() time.Time
+}
+
+func newOpenAIResponsesLearnedFieldStore(ttl time.Duration) *openAIResponsesLearnedFieldStore {
+	return &openAIResponsesLearnedFieldStore{
+		entries: make(map[openAIResponsesLearnedFieldKey]openAIResponsesLearnedFieldEntry),
+		ttl:     ttl,
+		now:     time.Now,
+	}
+}
+
+var openAIResponsesLearnedFields = newOpenAIResponsesLearnedFieldStore(openAIResponsesLearnedFieldTTL)
+
+func (s *openAIResponsesLearnedFieldStore) remember(accountID int64, model string, params ...string) {
+	if s == nil || accountID == 0 {
+		return
+	}
+	key := openAIResponsesLearnedFieldKey{AccountID: accountID, Model: strings.TrimSpace(model)}
+	if key.Model == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	s.pruneLocked(now)
+	entry, ok := s.entries[key]
+	if !ok || now.After(entry.expiresAt) || entry.params == nil {
+		entry = openAIResponsesLearnedFieldEntry{params: make(map[string]struct{}, len(params))}
+	}
+	recorded := false
+	for _, param := range params {
+		param = strings.ToLower(strings.TrimSpace(param))
+		if _, known := openAIResponsesLearnedOptionalFields[param]; !known {
+			continue
+		}
+		entry.params[param] = struct{}{}
+		recorded = true
+	}
+	if !recorded {
+		return
+	}
+	entry.expiresAt = now.Add(s.ttl)
+	s.entries[key] = entry
+}
+
+func (s *openAIResponsesLearnedFieldStore) params(accountID int64, model string) []string {
+	if s == nil || accountID == 0 {
+		return nil
+	}
+	key := openAIResponsesLearnedFieldKey{AccountID: accountID, Model: strings.TrimSpace(model)}
+	if key.Model == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.entries[key]
+	if !ok {
+		return nil
+	}
+	if s.now().After(entry.expiresAt) {
+		delete(s.entries, key)
+		return nil
+	}
+	if len(entry.params) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(entry.params))
+	for param := range entry.params {
+		out = append(out, param)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (s *openAIResponsesLearnedFieldStore) pruneLocked(now time.Time) {
+	for key, entry := range s.entries {
+		if now.After(entry.expiresAt) {
+			delete(s.entries, key)
+		}
+	}
+}
+
+// stripOpenAIResponsesLearnedFields deletes the learned optional fields that are
+// actually present, returning the rewritten body and the applied field names.
+func stripOpenAIResponsesLearnedFields(body []byte, params []string) ([]byte, []string) {
+	if len(body) == 0 || len(params) == 0 {
+		return body, nil
+	}
+	out := body
+	var applied []string
+	for _, param := range params {
+		path, known := openAIResponsesLearnedOptionalFields[strings.ToLower(strings.TrimSpace(param))]
+		if !known || !gjson.GetBytes(out, path).Exists() {
+			continue
+		}
+		next, err := sjson.DeleteBytes(out, path)
+		if err != nil {
+			continue
+		}
+		out = next
+		applied = append(applied, param)
+	}
+	return out, applied
+}
+
+// applyOpenAIResponsesLearnedFieldStrips strips any fields previously rejected
+// by this account+model upstream so the reactive retry below is not needed on
+// every turn (one upstream call instead of two).
+func applyOpenAIResponsesLearnedFieldStrips(body []byte, accountID int64, model string) ([]byte, []string) {
+	params := openAIResponsesLearnedFields.params(accountID, model)
+	if len(params) == 0 {
+		return body, nil
+	}
+	return stripOpenAIResponsesLearnedFields(body, params)
+}
+
+// rememberOpenAIResponsesRejectedFieldsFromStrip records which optional fields a
+// compatibility transform just removed. A field counts as rejected only when it
+// was present before the transform and absent afterwards.
+func rememberOpenAIResponsesRejectedFieldsFromStrip(before, after []byte, accountID int64, model string) {
+	if accountID == 0 || len(before) == 0 || len(after) == 0 {
+		return
+	}
+	var rejected []string
+	for param, path := range openAIResponsesLearnedOptionalFields {
+		if gjson.GetBytes(before, path).Exists() && !gjson.GetBytes(after, path).Exists() {
+			rejected = append(rejected, param)
+		}
+	}
+	if len(rejected) == 0 {
+		return
+	}
+	sort.Strings(rejected)
+	openAIResponsesLearnedFields.remember(accountID, model, rejected...)
+}
 
 type openAIResponsesRejectedFieldRetryState struct {
 	mu             sync.Mutex
@@ -151,6 +324,9 @@ func normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode int, body, respon
 	}
 	if isExplicitOpenAIResponsesFieldRejection(code, message) {
 		messageParam := openAIResponsesRejectedParamFromMessage(message)
+		if messageParam == "" {
+			messageParam = openAIResponsesGoUnknownFieldParamFromMessage(message)
+		}
 		if param != "" && messageParam != "" && param != messageParam {
 			return nil, "", false, nil
 		}
@@ -177,6 +353,20 @@ func normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode int, body, respon
 			}
 			return retryBody, "truncation parameter rejection", true, nil
 		}
+		if param == "summary" && gjson.GetBytes(body, "reasoning.summary").Exists() {
+			retryBody, err := sjson.DeleteBytes(body, "reasoning.summary")
+			if err != nil {
+				return nil, "", false, fmt.Errorf("delete rejected reasoning.summary: %w", err)
+			}
+			return retryBody, "reasoning.summary field rejection", true, nil
+		}
+		if param == "verbosity" && gjson.GetBytes(body, "text.verbosity").Exists() {
+			retryBody, err := sjson.DeleteBytes(body, "text.verbosity")
+			if err != nil {
+				return nil, "", false, fmt.Errorf("delete rejected text.verbosity: %w", err)
+			}
+			return retryBody, "text.verbosity field rejection", true, nil
+		}
 	}
 
 	messageContentParam := openAIResponsesInvalidTypeParamFromMessage(message)
@@ -202,7 +392,16 @@ func isExplicitOpenAIResponsesFieldRejection(code, message string) bool {
 		return true
 	}
 	return strings.Contains(message, "unknown parameter") ||
-		strings.Contains(message, "unsupported parameter")
+		strings.Contains(message, "unsupported parameter") ||
+		openAIResponsesGoUnknownFieldPattern.MatchString(message)
+}
+
+func openAIResponsesGoUnknownFieldParamFromMessage(message string) string {
+	match := openAIResponsesGoUnknownFieldPattern.FindStringSubmatch(strings.TrimSpace(message))
+	if len(match) != 2 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(match[1]))
 }
 
 func openAIResponsesRejectedParamFromMessage(message string) string {

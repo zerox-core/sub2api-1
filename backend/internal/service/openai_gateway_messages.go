@@ -343,6 +343,20 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
 
+	// 5b. Drop optional Responses fields that this account+model upstream is
+	// already known to reject, so a normally-rejected turn costs one upstream
+	// call instead of a 400 plus a compatibility retry.
+	if account.Platform != PlatformGrok {
+		if strippedBody, applied := applyOpenAIResponsesLearnedFieldStrips(responsesBody, account.ID, upstreamModel); len(applied) > 0 {
+			responsesBody = strippedBody
+			logger.L().Debug("openai messages: stripped previously rejected Responses fields",
+				zap.Int64("account_id", account.ID),
+				zap.String("upstream_model", upstreamModel),
+				zap.Strings("fields", applied),
+			)
+		}
+	}
+
 	// 6. Build upstream request
 	if account.UsesOpenAICodexProtocol() && account.Platform != PlatformGrok {
 		// Messages 兼容桥即使 body 未带 todo-guard/prompt_cache_key 标记（如映射到非
@@ -392,6 +406,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	// 7. Send request
 	proxyURL := ""
+	rejectedFieldRetryState := openAIResponsesRejectedFieldRetryStateForRequest(c, responsesBody)
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
@@ -400,10 +415,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// treating the 400 as a hard failure / failover trigger.
 	var resp *http.Response
 	for attempt := 0; ; attempt++ {
-		if attempt > 0 {
-			if account.Platform != PlatformGrok {
-				break
-			}
+		if attempt > 0 && account.Platform == PlatformGrok {
 			upstreamCtxRetry, releaseRetry := detachUpstreamContext(ctx)
 			upstreamReq, err = buildGrokResponsesRequest(upstreamCtxRetry, c, account, responsesBody, token, grokCacheIdentity, s.cfg, s.settingService)
 			releaseRetry()
@@ -415,7 +427,55 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		if err != nil {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		}
-		if account.Platform != PlatformGrok || attempt > 0 || resp.StatusCode != http.StatusBadRequest {
+		if account.Platform != PlatformGrok {
+			if resp.StatusCode != http.StatusBadRequest {
+				break
+			}
+			respBody := s.readUpstreamErrorBody(resp)
+			if resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, responsesBody, respBody)
+			if retryErr != nil {
+				return nil, fmt.Errorf("normalize messages rejected Responses field retry body: %w", retryErr)
+			}
+			if changed {
+				// Remember the rejection per account+model so later turns strip the
+				// same optional fields up front instead of paying the retry again.
+				rememberOpenAIResponsesRejectedFieldsFromStrip(responsesBody, retryBody, account.ID, upstreamModel)
+			}
+			if changed && rejectedFieldRetryState.Allow(retryBody) {
+				previousTurnState := upstreamReq.Header.Get("x-codex-turn-state")
+				responsesBody = retryBody
+				upstreamCtxRetry, releaseRetry := detachUpstreamContext(ctx)
+				upstreamReq, err = s.buildUpstreamRequest(upstreamCtxRetry, c, account, responsesBody, token, isStream, promptCacheKey, false)
+				releaseRetry()
+				if err != nil {
+					return nil, fmt.Errorf("build rejected Responses retry request: %w", err)
+				}
+				if promptCacheKey != "" {
+					isolatedSessionID := generateSessionUUID(isolateOpenAIUpstreamSessionID(apiKeyID, codexAccountIdentitySource(c, account), promptCacheKey))
+					upstreamReq.Header.Set("session_id", isolatedSessionID)
+					if upstreamReq.Header.Get("conversation_id") != "" {
+						upstreamReq.Header.Set("conversation_id", isolatedSessionID)
+					}
+				}
+				if compatTurnState != "" && upstreamReq.Header.Get("x-codex-turn-state") == "" {
+					upstreamReq.Header.Set("x-codex-turn-state", compatTurnState)
+				} else if previousTurnState != "" && upstreamReq.Header.Get("x-codex-turn-state") == "" {
+					upstreamReq.Header.Set("x-codex-turn-state", previousTurnState)
+				}
+				if account.UsesOpenAICodexProtocol() {
+					ensureCodexIdentityHeaders(upstreamReq.Header)
+					enforceCodexIdentityHeaders(upstreamReq.Header)
+				}
+				logger.L().Info("openai messages: retrying after rejected Responses field", zap.Int64("account_id", account.ID), zap.String("reason", reason))
+				continue
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			break
+		}
+		if resp.StatusCode != http.StatusBadRequest || attempt > 0 {
 			break
 		}
 		respBody := s.readUpstreamErrorBody(resp)
