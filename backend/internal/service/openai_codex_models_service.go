@@ -724,7 +724,89 @@ func isOpenAICodexReasoningGPTModel(modelID string) bool {
 	return isOpenAIGPT6Model(normalized) || strings.HasPrefix(normalized, "gpt-5")
 }
 
+// codexNonGPTImageInputModels lists non-GPT models that accept image input.
+//
+// These backends are reached through OpenAI-compatible hosts whose /models
+// response omits input_modalities, so the manifest cannot infer pictures from
+// upstream metadata and previously advertised them as text-only. Anthropic and
+// OpenAI clients trust that declaration and silently stop sending images, which
+// surfaces as "this model cannot see images" even though the upstream accepts
+// them (verified against api.zyuou.com and newapi.livzon.cn).
+//
+// This is an explicit allowlist on purpose. Prefix matching cannot be used here:
+// deepseek-v4-flash is genuinely text-only while deepseek-v4.1-flash is
+// multimodal, and the names differ by a single character. Add a model only after
+// confirming the upstream accepts image input.
+var codexNonGPTImageInputModels = map[string]struct{}{
+	"deepseek-v4.1-flash": {},
+	"deepseek-v4-pro":     {},
+	"kimi-k3":             {},
+	"kimi-k2.7-code":      {},
+	"kimi-k2.6":           {},
+	"glm-5.3":             {},
+	"glm-5.3-flash":       {},
+	"glm-5.2":             {},
+	"glm-5.1":             {},
+	"qwen3.8-flash":       {},
+	"qwen3.8-max":         {},
+	"qwen3.7-max":         {},
+	"qwen3.7-plus":        {},
+	"minimax-m3":          {},
+	"minimax-m2.7":        {},
+	"minimax-m2.5":        {},
+	"mimo-v2.5":           {},
+	"mimo-v2.5-pro":       {},
+}
+
+// isCodexNonGPTImageInputModel reports whether the model is a known non-GPT
+// multimodal backend. Effort/compact style suffixes are stripped first so
+// "kimi-k3-high" resolves to "kimi-k3".
+//
+// canonicalizeOpenAIModelAliasSpelling only understands the OpenAI family and
+// returns "" for everything else, so the lowercased original is the fallback
+// key here — using the canonical form alone would never match these models.
+func isCodexNonGPTImageInputModel(modelID string) bool {
+	candidates := make([]string, 0, 3)
+	if canonical := canonicalizeOpenAIModelAliasSpelling(modelID); canonical != "" {
+		candidates = append(candidates, canonical)
+	}
+	if lowered := strings.ToLower(strings.TrimSpace(modelID)); lowered != "" {
+		candidates = append(candidates, lowered)
+	}
+	for _, candidate := range candidates {
+		if _, ok := codexNonGPTImageInputModels[candidate]; ok {
+			return true
+		}
+		// Provider-qualified spellings ("livzon/kimi-k3") keep the model segment.
+		if base := codexUnqualifiedModelID(candidate); base != candidate {
+			if _, ok := codexNonGPTImageInputModels[base]; ok {
+				return true
+			}
+		}
+		// Drop a single trailing effort/compact suffix ("kimi-k3-high").
+		if idx := strings.LastIndex(candidate, "-"); idx > 0 {
+			if _, ok := codexNonGPTImageInputModels[candidate[:idx]]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// codexUnqualifiedModelID drops a single leading "vendor/" path segment.
+func codexUnqualifiedModelID(modelID string) string {
+	if idx := strings.LastIndex(modelID, "/"); idx >= 0 && idx+1 < len(modelID) {
+		return modelID[idx+1:]
+	}
+	return modelID
+}
+
 func isOpenAICodexImageInputModel(modelID string) bool {
+	// Check the non-GPT allowlist against the raw ID: canonicalization is
+	// OpenAI-specific and returns "" for every other family.
+	if isCodexNonGPTImageInputModel(modelID) {
+		return true
+	}
 	normalized := canonicalizeOpenAIModelAliasSpelling(modelID)
 	return isOpenAIGPT6Model(normalized) ||
 		strings.HasPrefix(normalized, "gpt-5") ||
@@ -1304,8 +1386,14 @@ func accountCodexModelSupportsImageInput(account *Account, upstreamModel string)
 		if strings.EqualFold(strings.TrimSpace(upstreamModel), "deepseek-v4-flash-vision-exp") {
 			return account.Type == AccountTypeAPIKey
 		}
-		if account.Platform != PlatformOpenAI || !isOpenAICodexImageInputModel(upstreamModel) {
+		if !isOpenAICodexImageInputModel(upstreamModel) {
 			return false
+		}
+		if account.Platform != PlatformOpenAI {
+			// Non-OpenAI platforms only inherit the explicit verified allowlist;
+			// they must not fall through to the permissive compatible-host
+			// default below, which exists for OpenAI-compatible GPT hosts.
+			return isCodexNonGPTImageInputModel(upstreamModel)
 		}
 		if account.IsOpenAIOAuth() {
 			return true

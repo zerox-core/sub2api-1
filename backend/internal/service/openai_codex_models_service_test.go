@@ -731,7 +731,10 @@ func TestBuildCodexModelsManifestForGroupUsesProviderImageCapabilities(t *testin
 			accounts: []Account{{
 				ID: 16, Platform: PlatformDeepseek, Type: AccountTypeAPIKey,
 			}},
-			modalities: []any{"text"},
+			// deepseek-v4-pro accepts image input on the verified upstreams
+			// (newapi.livzon.cn returned a real description of the test image),
+			// so it belongs to the explicit non-GPT multimodal allowlist.
+			modalities: []any{"text", "image"},
 		},
 		{
 			name:  "official OpenAI API key",
@@ -863,6 +866,90 @@ func TestBuildCodexModelsManifestForGroupUsesDeepSeekVisionCapabilities(t *testi
 			require.Len(t, models, 1)
 			require.Equal(t, tt.modalities, models[0]["input_modalities"])
 		})
+	}
+}
+
+func TestCodexNonGPTImageInputModelsRecognised(t *testing.T) {
+	t.Parallel()
+
+	// Verified multimodal backends must be advertised as image-capable.
+	for _, model := range []string{
+		"deepseek-v4.1-flash",
+		"deepseek-v4-pro",
+		"kimi-k3",
+		"glm-5.3",
+		"qwen3.8-flash",
+		"minimax-m3",
+		"mimo-v2.5",
+		"livzon/kimi-k3",
+	} {
+		require.True(t, isCodexNonGPTImageInputModel(model), model)
+		require.True(t, isOpenAICodexImageInputModel(model), model)
+	}
+
+	// deepseek-v4-flash differs from deepseek-v4.1-flash by one character and is
+	// genuinely text-only (verified upstream metadata), so prefix matching must
+	// never be introduced here.
+	for _, model := range []string{
+		"deepseek-v4-flash",
+		"deepseek-v4-flash-jd",
+		"glm-5.4",
+		"kimi-k4",
+		"",
+	} {
+		require.False(t, isCodexNonGPTImageInputModel(model), model)
+		require.False(t, isOpenAICodexImageInputModel(model), model)
+	}
+}
+
+func TestAccountCodexModelSupportsImageInputNonGPTMultimodal(t *testing.T) {
+	t.Parallel()
+
+	apiKeyAccount := func(platform string) *Account {
+		return &Account{ID: 1, Platform: platform, Type: AccountTypeAPIKey}
+	}
+
+	// An OpenAI-compatible host advertises the verified model as multimodal.
+	require.True(t, accountCodexModelSupportsImageInput(apiKeyAccount(PlatformOpenAI), "deepseek-v4.1-flash"))
+	require.True(t, accountCodexModelSupportsImageInput(apiKeyAccount(PlatformOpenAI), "kimi-k3"))
+
+	// Text-only neighbours stay text-only.
+	require.False(t, accountCodexModelSupportsImageInput(apiKeyAccount(PlatformOpenAI), "deepseek-v4-flash"))
+
+	// Non-OpenAI platforms may only use the verified allowlist, never the
+	// permissive compatible-host default reserved for GPT hosts.
+	require.True(t, accountCodexModelSupportsImageInput(apiKeyAccount(PlatformDeepseek), "deepseek-v4.1-flash"))
+	require.False(t, accountCodexModelSupportsImageInput(apiKeyAccount(PlatformDeepseek), "gpt-5.6-sol"))
+
+	// Explicit upstream metadata still wins over the name-based allowlist.
+	narrowed := apiKeyAccount(PlatformOpenAI)
+	narrowed.SetUpstreamModelMetadataSnapshot(UpstreamModelMetadataSnapshot{Models: map[string]UpstreamModelMetadata{
+		"deepseek-v4.1-flash": {ID: "deepseek-v4.1-flash", InputModalities: []string{"text"}},
+	}})
+	require.False(t, accountCodexModelSupportsImageInput(narrowed, "deepseek-v4.1-flash"))
+}
+
+func TestBuildCodexModelsManifestAdvertisesNonGPTImageInput(t *testing.T) {
+	t.Parallel()
+
+	const groupID int64 = 791
+	newAccount := func(id int64, model string) Account {
+		return Account{
+			ID: id, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+			Credentials: map[string]any{"model_mapping": map[string]any{"ds-alias": model}},
+		}
+	}
+
+	for _, model := range []string{"deepseek-v4.1-flash", "kimi-k3"} {
+		svc := &GatewayService{accountRepo: codexModelsVisibilityAccountRepo{byGroup: map[int64][]Account{
+			groupID: {newAccount(1, model)},
+		}}}
+		body, err := svc.BuildCodexModelsManifestForGroup(context.Background(),
+			&Group{ID: groupID, Platform: PlatformOpenAI}, "", []string{"ds-alias"})
+		require.NoError(t, err)
+		models := decodeCodexManifestModels(t, body)
+		require.Len(t, models, 1)
+		require.Equal(t, []any{"text", "image"}, models[0]["input_modalities"], model)
 	}
 }
 
