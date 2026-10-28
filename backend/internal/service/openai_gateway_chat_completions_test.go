@@ -1145,8 +1145,12 @@ func TestGPT6RawChatRejectsReasoningToolCalls(t *testing.T) {
 		account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"model_mapping": map[string]any{"public": model}}}
 		svc := &OpenAIGatewayService{}
 		_, err := svc.forwardAsRawChatCompletions(context.Background(), c, account, []byte(`{"model":"public","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup"}}]}`), "")
-		require.ErrorContains(t, err, "requires Responses")
-		require.Equal(t, 400, rec.Code)
+		var failoverErr *UpstreamFailoverError
+		require.ErrorAs(t, err, &failoverErr)
+		require.True(t, failoverErr.ShouldRetryNextAccount())
+		require.False(t, failoverErr.RetryableOnSameAccount)
+		require.Contains(t, failoverErr.ClientMessage, "requires Responses")
+		require.Equal(t, http.StatusOK, rec.Code)
 	}
 }
 
@@ -1261,7 +1265,7 @@ func TestGPT61SolRejectsDisabledReasoningBeforeForwarding(t *testing.T) {
 		require.Error(t, validateGPT61SolCompatRequest([]byte(body), "gpt-6.1-sol"))
 		require.NoError(t, validateGPT61SolCompatRequest([]byte(body), "gpt-6-sol"))
 	}
-	for _, field := range []string{`"reasoning_effort":"none"`, `"reasoning_effort":"minimal"`, `"tools":[{"type":"function","function":{"name":"lookup"}}]`} {
+	for _, field := range []string{`"reasoning_effort":"none"`, `"reasoning_effort":"minimal"`} {
 		body := []byte(`{"model":"public",` + field + `,"messages":[{"role":"user","content":"hello"}]}`)
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
@@ -1272,7 +1276,19 @@ func TestGPT61SolRejectsDisabledReasoningBeforeForwarding(t *testing.T) {
 		require.Error(t, err)
 		require.Equal(t, http.StatusBadRequest, rec.Code)
 		require.Contains(t, rec.Body.String(), "gpt-6.1-sol")
+		var failoverErr *UpstreamFailoverError
+		require.False(t, errors.As(err, &failoverErr))
 	}
+	toolBody := []byte(`{"model":"public","tools":[{"type":"function","function":{"name":"lookup"}}],"messages":[{"role":"user","content":"hello"}]}`)
+	toolRec := httptest.NewRecorder()
+	toolCtx, _ := gin.CreateTestContext(toolRec)
+	toolCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(toolBody))
+	_, toolErr := (&OpenAIGatewayService{cfg: &config.Config{}}).forwardAsRawChatCompletions(context.Background(), toolCtx, &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"model_mapping": map[string]any{"public": "gpt-6.1-sol"}}}, toolBody, "")
+	var toolFailover *UpstreamFailoverError
+	require.ErrorAs(t, toolErr, &toolFailover)
+	require.True(t, toolFailover.ShouldRetryNextAccount())
+	require.Contains(t, toolFailover.ClientMessage, "gpt-6.1-sol")
+	require.Equal(t, http.StatusOK, toolRec.Code)
 }
 
 func TestGPT61SolMappedReasoningModeAndSampling(t *testing.T) {
@@ -1314,7 +1330,7 @@ func TestGPT61SolOnlyChatFallbackRejectsToolsAndDisabledReasoning(t *testing.T) 
 				`{"model":"public","input":"hi","reasoning":{"effort":"none"}}`,
 			}
 		}
-		for _, body := range bodies {
+		for i, body := range bodies {
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
@@ -1327,6 +1343,14 @@ func TestGPT61SolOnlyChatFallbackRejectsToolsAndDisabledReasoning(t *testing.T) 
 				_, err = svc.forwardAnthropicViaRawChatCompletions(context.Background(), c, account, []byte(body), "")
 			}
 			require.Error(t, err)
+			if i == 0 {
+				var failoverErr *UpstreamFailoverError
+				require.ErrorAs(t, err, &failoverErr)
+				require.True(t, failoverErr.ShouldRetryNextAccount())
+				require.Contains(t, failoverErr.ClientMessage, "gpt-6.1-sol")
+				require.Equal(t, http.StatusOK, rec.Code)
+				continue
+			}
 			require.Equal(t, http.StatusBadRequest, rec.Code)
 			require.Contains(t, rec.Body.String(), "gpt-6.1-sol")
 		}
