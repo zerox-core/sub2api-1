@@ -1171,7 +1171,7 @@ func TestGPT6ReasoningModeAndSamplingCompatibility(t *testing.T) {
 		d := newConfiguredCodexModelDescriptor(model)
 		require.NotNil(t, d.DefaultReasoningLevel)
 		require.Equal(t, "medium", *d.DefaultReasoningLevel)
-		require.EqualValues(t, 872000, d.MaxContextWindow)
+		require.EqualValues(t, 1050000, d.MaxContextWindow)
 		require.Len(t, d.SupportedReasoningLevels, 5)
 		require.Len(t, d.ServiceTiers, 1)
 	}
