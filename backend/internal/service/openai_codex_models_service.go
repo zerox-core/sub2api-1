@@ -340,6 +340,7 @@ const (
 	configuredCodexGrokContext         = 500_000
 	configuredCodexGrokBuildContext    = 256_000
 	configuredCodexGPT56MaxContext     = 872_000
+	configuredCodexGPT6SolContext      = 1_050_000
 	configuredCodexGPT6AstraContext    = 1_050_000
 	configuredCodexToolOutputMaxTokens = 10_000
 )
@@ -518,10 +519,14 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 			descriptor.SupportedReasoningLevels = configuredCodexGPTReasoningLevels(modelID)
 			descriptor.DefaultReasoningSummary = "none"
 			descriptor.TruncationPolicy = configuredCodexTruncationPolicy{Mode: "tokens", Limit: configuredCodexToolOutputMaxTokens}
-			// GPT-6 Sol/Luna retain the existing 5.6 Codex window as an offline
-			// compatibility template; live account metadata remains authoritative.
-			if isOpenAIGPT56Model(modelID) || openai.IsGPT6SolOrLunaModelSpelling(modelID) || openai.IsGPT61SolModelSpelling(modelID) {
+			// GPT-5.6 keeps its conservative offline compatibility window. GPT-6
+			// Sol/Luna and GPT-6.1 Sol use the provider catalog's 1.05M window.
+			if isOpenAIGPT56Model(modelID) {
 				descriptor.MaxContextWindow = configuredCodexGPT56MaxContext
+			}
+			if openai.IsGPT6SolOrLunaModelSpelling(modelID) || openai.IsGPT61SolModelSpelling(modelID) {
+				descriptor.ContextWindow = configuredCodexGPT6SolContext
+				descriptor.MaxContextWindow = configuredCodexGPT6SolContext
 			}
 			if isOpenAIGPT6AstraModel(modelID) {
 				// Codex resolves the Ultra workflow to this effort before inference.

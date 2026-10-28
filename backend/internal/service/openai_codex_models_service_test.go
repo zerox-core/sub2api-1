@@ -3798,8 +3798,8 @@ func TestGPT61SolOfflineCodexCatalog(t *testing.T) {
 	m := catalog.Models[0]
 	require.Equal(t, "gpt-6.1-sol", m["slug"])
 	require.Equal(t, "low", m["default_reasoning_level"])
-	require.EqualValues(t, 272000, m["context_window"])
-	require.EqualValues(t, 872000, m["max_context_window"])
+	require.EqualValues(t, 1050000, m["context_window"])
+	require.EqualValues(t, 1050000, m["max_context_window"])
 	require.Equal(t, "xhigh", m["multi_agent_reasoning_effort"])
 	require.Equal(t, "v2", m["multi_agent_version"])
 	require.Nil(t, m["default_service_tier"])
