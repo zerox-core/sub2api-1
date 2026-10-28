@@ -26,6 +26,7 @@ var DefaultModels = []Model{
 	{ID: "gpt-5.6-terra", Object: "model", Created: 1780876800, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.6 Terra"},
 	{ID: "gpt-5.6-luna", Object: "model", Created: 1780876800, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.6 Luna"},
 	{ID: "gpt-6.1-sol", Object: "model", Created: 1790640000, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6.1 Sol"},
+	{ID: "gpt-6.1-terra", Object: "model", Created: 1790640000, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6.1 Terra"},
 	{ID: "gpt-6-sol", Object: "model", Created: 1790035200, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6 Sol"},
 	{ID: "gpt-6-luna", Object: "model", Created: 1790035200, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6 Luna"},
 	{ID: "gpt-6-astra", Object: "model", Created: 1788480000, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6 Astra"},
@@ -86,6 +87,14 @@ var instructionsGPT6Astra string
 //
 //go:embed codex_gpt61_sol.json
 var CodexGPT61SolMetadata []byte
+
+// CodexGPT61TerraMetadata is the official GPT-6.1 Terra descriptor from the same
+// openai/codex catalog (release/0.165.0-alpha.1.2, models-manager/models.json).
+// Terra differs from Sol in window (500K/872K vs 1.05M) and reasoning levels
+// (it publishes ultra), so it needs its own descriptor rather than a Sol clone.
+//
+//go:embed codex_gpt61_terra.json
+var CodexGPT61TerraMetadata []byte
 
 // latestCodexInstructions 返回当前已知最新版本的 Codex base instructions，
 // 当前为 GPT-5.5；若 5.5 prompt 意外为空则回退到 DefaultInstructions 保证非空。
@@ -159,6 +168,16 @@ func CodexBaseInstructionsForModel(model string) string {
 			panic(err)
 		}
 		return metadata.ModelMessages.InstructionsTemplate
+	case IsGPT61TerraModelSpelling(canonical):
+		var metadata struct {
+			ModelMessages struct {
+				InstructionsTemplate string `json:"instructions_template"`
+			} `json:"model_messages"`
+		}
+		if err := json.Unmarshal(CodexGPT61TerraMetadata, &metadata); err != nil {
+			panic(err)
+		}
+		return metadata.ModelMessages.InstructionsTemplate
 	case canonical == "gpt-6" || canonical == "gpt-6-astra" || strings.HasPrefix(canonical, "gpt-6-astra-"):
 		if v := strings.TrimSpace(instructionsGPT6Astra); v != "" {
 			return instructionsGPT6Astra
@@ -216,14 +235,54 @@ func IsGPT61SolModelSpelling(model string) bool {
 	}
 }
 
-// ValidateGPT61SolReasoningEffort rejects disabled reasoning instead of silently
-// increasing the client's requested effort on compatibility paths.
-func ValidateGPT61SolReasoningEffort(model, effort string) error {
+// IsGPT61TerraModelSpelling recognizes the published model and local effort/compact
+// spellings. Invalid effort suffixes remain identifiable for request validation.
+func IsGPT61TerraModelSpelling(model string) bool {
+	canonical := CanonicalizeOpenAIModelAliasSpelling(model)
+	if canonical == "gpt-6.1-terra" {
+		return true
+	}
+	suffix, ok := strings.CutPrefix(canonical, "gpt-6.1-terra-")
+	if !ok {
+		return false
+	}
+	switch suffix {
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "openai-compact":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsGPT61ModelSpelling recognizes either GPT-6.1 tier (Sol or Terra). Callers that
+// only need the shared 6.1 family can use it; effort validation stays per-tier
+// because Terra accepts ultra and Sol does not.
+func IsGPT61ModelSpelling(model string) bool {
+	return IsGPT61SolModelSpelling(model) || IsGPT61TerraModelSpelling(model)
+}
+
+// ValidateGPT61ReasoningEffort rejects disabled reasoning instead of silently
+// increasing the client's requested effort on compatibility paths. The accepted
+// upper tiers differ per model: Terra publishes ultra, Sol stops at max.
+func ValidateGPT61ReasoningEffort(model, effort string) error {
+	normalized := strings.ToLower(strings.TrimSpace(effort))
 	if IsGPT61SolModelSpelling(model) {
-		switch strings.ToLower(strings.TrimSpace(effort)) {
+		switch normalized {
 		case "none", "minimal":
 			return fmt.Errorf("gpt-6.1-sol does not support reasoning effort %q; use low, medium, high, xhigh or max", effort)
 		}
 	}
+	if IsGPT61TerraModelSpelling(model) {
+		switch normalized {
+		case "none", "minimal":
+			return fmt.Errorf("gpt-6.1-terra does not support reasoning effort %q; use low, medium, high, xhigh, max or ultra", effort)
+		}
+	}
 	return nil
+}
+
+// ValidateGPT61SolReasoningEffort is the Sol-only entry point kept for callers that
+// route Sol explicitly. Prefer ValidateGPT61ReasoningEffort for shared code paths.
+func ValidateGPT61SolReasoningEffort(model, effort string) error {
+	return ValidateGPT61ReasoningEffort(model, effort)
 }

@@ -76,8 +76,8 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		writeOpenAIResponsesFallbackError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
-	if openai.IsGPT61SolModelSpelling(upstreamModel) && len(effectiveTools) > 0 {
-		return nil, newOpenAIAccountProtocolMismatchFailover("gpt-6.1-sol requires Responses for tool calls; this account only supports Chat Completions")
+	if openai.IsGPT61ModelSpelling(upstreamModel) && len(effectiveTools) > 0 {
+		return nil, newOpenAIAccountProtocolMismatchFailover(fmt.Sprintf("%s requires Responses for tool calls; this account only supports Chat Completions", upstreamModel))
 	}
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
 	// 国产模型默认 effort 补充：需要 mappedModel 判定，推迟到 billingModel 算出之后。

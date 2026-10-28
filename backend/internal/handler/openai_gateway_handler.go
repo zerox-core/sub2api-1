@@ -655,9 +655,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 复用前置权限与并发阶段在未修改 body 上确认的显式生图意图，避免大 tools 请求重复扫描。
 	// 该判断已排除 Codex 被动 image_gen namespace，避免 CC-only 账号被误过滤（#4476）。
 	needsResponses := nativeV2 || legacyCompact
-	// gpt-6.1-sol 的 Chat Completions 端点不接受工具调用：带工具的请求必须由
+	// gpt-6.1-sol / gpt-6.1-terra 的 Chat Completions 端点不接受工具调用：带工具的请求必须由
 	// Responses 能力账号承接，否则会落到只支持 Chat 的账号并在转发层报错。
-	if requiresResponsesForGPT61SolToolRequest(reqModel, body) {
+	if requiresResponsesForGPT61ToolRequest(reqModel, body) {
 		needsResponses = true
 	}
 	requiredCapability := openAIResponsesRequiredCapabilityForRequest(imageIntent, needsResponses, requestPlatform)

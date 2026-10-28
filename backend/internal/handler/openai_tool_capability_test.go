@@ -2,10 +2,12 @@ package handler
 
 import "testing"
 
-func TestRequiresResponsesForGPT61SolToolRequest(t *testing.T) {
+func TestRequiresResponsesForGPT61ToolRequest(t *testing.T) {
 	toolsBody := []byte(`{"model":"gpt-6.1-sol","tools":[{"type":"function","name":"shell"}]}`)
 	emptyToolsBody := []byte(`{"model":"gpt-6.1-sol","tools":[]}`)
 	noToolsBody := []byte(`{"model":"gpt-6.1-sol","messages":[]}`)
+	terraToolsBody := []byte(`{"model":"gpt-6.1-terra","tools":[{"type":"function","name":"shell"}]}`)
+	terraNoToolsBody := []byte(`{"model":"gpt-6.1-terra","messages":[]}`)
 
 	cases := []struct {
 		name  string
@@ -16,14 +18,17 @@ func TestRequiresResponsesForGPT61SolToolRequest(t *testing.T) {
 		{"gpt61sol with tools", "gpt-6.1-sol", toolsBody, true},
 		{"gpt61sol empty tools", "gpt-6.1-sol", emptyToolsBody, false},
 		{"gpt61sol without tools", "gpt-6.1-sol", noToolsBody, false},
+		{"gpt61terra with tools", "gpt-6.1-terra", terraToolsBody, true},
+		{"gpt61terra without tools", "gpt-6.1-terra", terraNoToolsBody, false},
+		{"gpt61terra prefixed with tools", "openai/gpt-6.1-terra-max", terraToolsBody, true},
 		{"other model with tools", "gpt-5.6", toolsBody, false},
 		{"empty body", "gpt-6.1-sol", nil, false},
 		{"invalid body", "gpt-6.1-sol", []byte("not-json"), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := requiresResponsesForGPT61SolToolRequest(tc.model, tc.body); got != tc.want {
-				t.Fatalf("requiresResponsesForGPT61SolToolRequest(%q) = %v, want %v", tc.model, got, tc.want)
+			if got := requiresResponsesForGPT61ToolRequest(tc.model, tc.body); got != tc.want {
+				t.Fatalf("requiresResponsesForGPT61ToolRequest(%q) = %v, want %v", tc.model, got, tc.want)
 			}
 		})
 	}

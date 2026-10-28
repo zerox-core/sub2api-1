@@ -27,10 +27,12 @@ func bodyDeclaresTools(body []byte) bool {
 	return tools.IsArray() && len(tools.Array()) > 0
 }
 
-// requiresResponsesForGPT61SolToolRequest 报告该请求是否必须由支持 Responses 的账号承接。
-// 仅覆盖 gpt-6.1-sol：其他模型在 Chat Completions 上支持工具调用，保持原有路由。
-func requiresResponsesForGPT61SolToolRequest(model string, body []byte) bool {
-	if !openai.IsGPT61SolModelSpelling(model) {
+// requiresResponsesForGPT61ToolRequest 报告该请求是否必须由支持 Responses 的账号承接。
+// 覆盖 gpt-6.1-sol 与 gpt-6.1-terra：两者的 Chat Completions 上游端点都不接受工具
+// 调用，带工具的请求只能经 Responses 转发。其他模型在 Chat Completions 上支持工具
+// 调用，保持原有路由。
+func requiresResponsesForGPT61ToolRequest(model string, body []byte) bool {
+	if !openai.IsGPT61ModelSpelling(model) {
 		return false
 	}
 	return bodyDeclaresTools(body)

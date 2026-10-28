@@ -64,8 +64,8 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
-	if openai.IsGPT61SolModelSpelling(upstreamModel) && len(anthropicReq.Tools) > 0 {
-		return nil, newOpenAIAccountProtocolMismatchFailover("gpt-6.1-sol requires Responses for tool calls; this account only supports Chat Completions")
+	if openai.IsGPT61ModelSpelling(upstreamModel) && len(anthropicReq.Tools) > 0 {
+		return nil, newOpenAIAccountProtocolMismatchFailover(fmt.Sprintf("%s requires Responses for tool calls; this account only supports Chat Completions", upstreamModel))
 	}
 	chatReq.Model = upstreamModel
 	chatReq.ReasoningEffort = openAICompatAnthropicReasoningEffort(&anthropicReq, upstreamModel, chatReq.ReasoningEffort)

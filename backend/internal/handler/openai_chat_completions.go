@@ -174,10 +174,10 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	ccPricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
 	c.Request = c.Request.WithContext(ccPricingCtx)
 
-	// gpt-6.1-sol 的 Chat Completions 端点不接受工具调用：带工具的请求只有
+	// gpt-6.1-sol / gpt-6.1-terra 的 Chat Completions 端点不接受工具调用：带工具的请求只有
 	// Responses 能力账号能承接，选号阶段就应排除仅支持 Chat 的账号。
 	chatRequiredCapability := service.OpenAIEndpointCapabilityChatCompletions
-	if requiresResponsesForGPT61SolToolRequest(forwardModel, body) {
+	if requiresResponsesForGPT61ToolRequest(forwardModel, body) {
 		chatRequiredCapability = service.OpenAIEndpointCapabilityResponses
 	}
 
