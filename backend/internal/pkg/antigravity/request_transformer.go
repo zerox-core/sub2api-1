@@ -239,6 +239,8 @@ var modelInfoMap = map[string]modelInfo{
 	"claude-fable-5-1":  {DisplayName: "Claude Fable 5.1", CanonicalID: "claude-fable-5-1"},
 	"claude-fable-5":    {DisplayName: "Claude Fable 5", CanonicalID: "claude-fable-5"},
 	"claude-opus-4-8":   {DisplayName: "Claude Opus 4.8", CanonicalID: "claude-opus-4-8"},
+	"claude-opus-5-5":   {DisplayName: "Claude Opus 5.5", CanonicalID: "claude-opus-5-5-medium"},
+	"claude-sonnet-5-5": {DisplayName: "Claude Sonnet 5.5", CanonicalID: "claude-sonnet-5-5-medium"},
 	"claude-opus-4-7":   {DisplayName: "Claude Opus 4.7", CanonicalID: "claude-opus-4-7"},
 	"claude-opus-4-5":   {DisplayName: "Claude Opus 4.5", CanonicalID: "claude-opus-4-5-20250929"},
 	"claude-opus-4-6":   {DisplayName: "Claude Opus 4.6", CanonicalID: "claude-opus-4-6"},
@@ -675,7 +677,8 @@ func isAntigravityOpusHighTierModel(model string) bool {
 	lower := strings.ToLower(model)
 	return strings.HasPrefix(lower, "claude-opus-4-6") ||
 		strings.HasPrefix(lower, "claude-opus-4-7") ||
-		strings.HasPrefix(lower, "claude-opus-4-8")
+		strings.HasPrefix(lower, "claude-opus-4-8") ||
+		strings.HasPrefix(lower, "claude-opus-5-5")
 }
 
 func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {

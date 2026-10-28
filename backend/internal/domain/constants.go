@@ -114,6 +114,10 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"claude-fable-5-1":           "claude-fable-5-1",         // 官方模型
 	"claude-fable-5":             "claude-fable-5",           // 官方模型
 	"claude-opus-4-8":            "claude-opus-4-8",          // 官方模型
+	"claude-opus-5-5":            "claude-opus-5-5-medium",   // Medium tier alias
+	"claude-opus-5-5-medium":     "claude-opus-5-5-medium",   // Antigravity tiered model
+	"claude-sonnet-5-5":          "claude-sonnet-5-5-medium", // Medium tier alias
+	"claude-sonnet-5-5-medium":   "claude-sonnet-5-5-medium", // Antigravity tiered model
 	"claude-opus-4-7":            "claude-opus-4-7",          // 官方模型
 	"claude-opus-4-6-thinking":   "claude-opus-4-6-thinking", // 官方模型
 	"claude-opus-4-6":            "claude-opus-4-6-thinking", // 简称映射
@@ -134,6 +138,9 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"gemini-2.5-flash-lite":          "gemini-2.5-flash-lite",
 	"gemini-2.5-flash-thinking":      "gemini-2.5-flash-thinking",
 	"gemini-2.5-pro":                 "gemini-2.5-pro",
+	// Gemini 4 Argon tiered models
+	"gemini-4-argon-low":    "gemini-4-argon-low",
+	"gemini-4-argon-medium": "gemini-4-argon-medium",
 	// Gemini 3 白名单
 	"gemini-3-flash":    "gemini-3-flash",
 	"gemini-3-pro-high": "gemini-3-pro-high",
