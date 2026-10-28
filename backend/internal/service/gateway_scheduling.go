@@ -1157,6 +1157,11 @@ func (s *GatewayService) isAccountSchedulableForModelSelection(ctx context.Conte
 	if account == nil {
 		return false
 	}
+	if account.Platform == PlatformOpenAI {
+		if capability := OpenAIRequiredEndpointCapabilityFromContext(ctx); capability != "" && !account.SupportsOpenAIEndpointCapability(capability) {
+			return false
+		}
+	}
 	return account.IsSchedulableForModelWithContext(ctx, requestedModel)
 }
 

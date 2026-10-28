@@ -405,6 +405,11 @@ func (s *OpenAIGatewayService) newOpenAIAccountFailoverErrorWithClassificationHe
 
 const (
 	openAIUpstreamAccessUnavailableClientMessage = "Upstream access is temporarily unavailable, please retry later"
+	// OpenAIAccountProtocolMismatchReason marks a selected account that cannot
+	// serve this request on its current protocol, for example a Chat
+	// Completions-only account receiving a tool call that requires Responses.
+	// The request must move to another account instead of failing immediately.
+	OpenAIAccountProtocolMismatchReason = GatewayFailureReason("openai_account_protocol_mismatch")
 	// OpenAIUpstreamAccessStateReason marks a provider credential whose
 	// account, workspace, or organization is unavailable.
 	OpenAIUpstreamAccessStateReason = GatewayFailureReason("openai_upstream_access_state")
@@ -412,6 +417,32 @@ const (
 	// preserve an official Responses HTTP continuation without dropping state.
 	OpenAIHTTPContinuationUnsupportedReason = GatewayFailureReason("openai_http_continuation_unsupported")
 )
+
+func newOpenAIAccountProtocolMismatchFailover(message string) *UpstreamFailoverError {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "selected account cannot serve this request"
+	}
+	body, err := json.Marshal(map[string]any{
+		"error": map[string]string{
+			"message": message,
+			"type":    "invalid_request_error",
+			"code":    "account_protocol_mismatch",
+		},
+	})
+	if err != nil {
+		body = []byte(`{"error":{"type":"invalid_request_error","code":"account_protocol_mismatch"}}`)
+	}
+	return &UpstreamFailoverError{
+		StatusCode:        http.StatusBadRequest,
+		ResponseBody:      body,
+		Scope:             GatewayFailureScopeAccount,
+		Reason:            OpenAIAccountProtocolMismatchReason,
+		NextAccountAction: NextAccountRetry,
+		ClientStatusCode:  http.StatusBadRequest,
+		ClientMessage:     message,
+	}
+}
 
 // isOpenAIUpstreamAccessStateError recognizes provider-side credential state
 // failures only from explicit structured codes. Free-form messages may contain

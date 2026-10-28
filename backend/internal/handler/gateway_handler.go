@@ -118,6 +118,23 @@ func NewGatewayHandler(
 	}
 }
 
+// requiresResponsesForAnthropicToolRequest prevents a Chat Completions-only
+// API-key account from being selected for Claude tool turns that require the
+// OpenAI Responses protocol. Plain text turns remain eligible for those
+// accounts, so the mixed group can still use them for requests they support.
+func requiresResponsesForAnthropicToolRequest(model string, body []byte, thinkingEnabled bool) bool {
+	var request struct {
+		Tools []json.RawMessage `json:"tools"`
+	}
+	if len(body) == 0 || json.Unmarshal(body, &request) != nil || len(request.Tools) == 0 {
+		return false
+	}
+	if openai.IsGPT61SolModelSpelling(model) {
+		return true
+	}
+	return thinkingEnabled && openai.IsGPT6SolOrLunaModelSpelling(model)
+}
+
 // Messages handles Claude API compatible messages endpoint
 // POST /v1/messages
 func (h *GatewayHandler) Messages(c *gin.Context) {
@@ -305,6 +322,16 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		platform = resolvedPlatform
 	} else if apiKey.Group != nil {
 		platform = apiKey.Group.Platform
+	}
+	if requiresResponsesForAnthropicToolRequest(reqModel, body, parsedReq.ThinkingEnabled) {
+		c.Request = c.Request.WithContext(service.WithOpenAIRequiredEndpointCapability(
+			c.Request.Context(),
+			service.OpenAIEndpointCapabilityResponses,
+		))
+		reqLog.Info("gateway.responses_capability_required",
+			zap.String("model", reqModel),
+			zap.String("capability", string(service.OpenAIEndpointCapabilityResponses)),
+		)
 	}
 	sessionKey := sessionHash
 	if platform == service.PlatformGemini && sessionHash != "" {
