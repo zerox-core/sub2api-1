@@ -460,6 +460,27 @@ gateway:
     # Stats cache for free-tier soft gate. Hot path never waits on DB: misses
     # fail open and refresh in the background. Prefer >= 60s in production.
     free_quota_stats_cache_seconds: 60
+    # Request-side context compaction. xAI bills the WHOLE request at 2x once
+    # (input + cache_read + cache_creation) reaches 200k tokens, while the Grok
+    # window is 500k, so a client never trims early enough to avoid the
+    # multiplier. When enabled, the gateway drops the oldest complete turns from
+    # the middle of the history and inserts a placeholder describing what was
+    # removed. Instructions and tools are never touched.
+    # 请求侧上下文压缩。xAI 在 (input + cache_read + cache_creation) 达到 200k
+    # token 时会把整个请求按 2 倍计费，而 Grok 窗口是 500k，客户端远不会这么早
+    # 触发压缩。开启后网关会从历史中段丢弃最老的完整轮次并插入一条说明占位，
+    # instructions 与 tools 永远不动。
+    context_compaction_enabled: false
+    # Estimated input tokens that start a trim. Keep it at or above the pricing
+    # threshold, otherwise requests still cross it.
+    # 触发压缩的估算输入 token 数。应不低于计费阈值，否则请求仍会越过阈值。
+    context_compaction_trigger_tokens: 200000
+    # Input budget a trimmed turn aims for. Compacting deeply once is cheaper
+    # than compacting just under the trigger repeatedly: the trim invalidates
+    # the cached prefix, and every later turn then shares the smaller prefix.
+    # 压缩后目标输入 token 数。一次压深比反复贴着阈值压更便宜：压缩会让缓存前缀
+    # 失效一次，之后每一轮都复用更小的前缀。
+    context_compaction_target_tokens: 110000
   # HTTP upstream connection pool settings (HTTP/2 + multi-proxy scenario defaults)
   # HTTP 上游连接池配置（HTTP/2 + 多代理场景默认值）
   # Max idle connections across all hosts

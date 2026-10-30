@@ -321,6 +321,18 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	responsesReq.ServiceTier = normalizedOpenAIServiceTierValue(gjson.GetBytes(responsesBody, "service_tier").String())
 	grokCacheIdentity := ""
 	if account.Platform == PlatformGrok {
+		// Trim oversized histories before the cache identity is derived so the
+		// identity and the body sent upstream describe the same request.
+		compactedBody, _, compactErr := s.compactGrokRequestBody(c, responsesBody, account, upstreamModel)
+		if compactErr != nil {
+			logger.L().Warn("openai messages: grok context compaction skipped",
+				zap.Int64("account_id", account.ID),
+				zap.String("upstream_model", upstreamModel),
+				zap.Error(compactErr),
+			)
+		} else {
+			responsesBody = compactedBody
+		}
 		grokIntentBody := responsesBody
 		grokCacheIdentity = resolveGrokCacheIdentity(c, grokIntentBody, promptCacheKey, upstreamModel)
 		patchedBody, patchErr := patchGrokResponsesBody(grokIntentBody, upstreamModel)

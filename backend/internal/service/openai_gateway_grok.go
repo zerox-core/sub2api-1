@@ -13,10 +13,12 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"go.uber.org/zap"
 )
 
 const (
@@ -67,10 +69,26 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	// OpenAI /responses/compact is not a native xAI endpoint. Convert it into a
 	// normal Grok Responses turn that asks for a structured summary, then map the
 	// reply back to an OpenAI compaction item on the way out.
-	if isOpenAIResponsesCompactPath(c) {
+	compactTurn := isOpenAIResponsesCompactPath(c)
+	if compactTurn {
 		patchedBody, err = buildGrokCompactRequestBody(patchedBody)
 		if err != nil {
 			return nil, err
+		}
+	}
+	// Trim oversized histories before the cache identity is derived from the body
+	// xAI will actually see. A compact turn is skipped: its whole purpose is to
+	// summarize the history, so trimming the history it receives would summarize
+	// the wrong thing.
+	if !compactTurn {
+		if compactedBody, _, compactErr := s.compactGrokRequestBody(c, patchedBody, account, upstreamModel); compactErr != nil {
+			logger.L().Warn("grok responses: context compaction skipped",
+				zap.Int64("account_id", account.ID),
+				zap.String("upstream_model", upstreamModel),
+				zap.Error(compactErr),
+			)
+		} else {
+			patchedBody = compactedBody
 		}
 	}
 	// Derive the identity from the request xAI will actually see. This makes

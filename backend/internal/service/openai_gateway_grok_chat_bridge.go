@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"go.uber.org/zap"
 )
 
 const (
@@ -570,6 +572,17 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 	responsesBody, err = patchGrokResponsesBody(responsesBody, upstreamModel)
 	if err != nil {
 		return nil, fmt.Errorf("patch grok responses bridge request: %w", err)
+	}
+	// Trim oversized histories before the cache routing below sees the body, so
+	// the tool prefix and the trimmed history describe the same request.
+	if compactedBody, _, compactErr := s.compactGrokRequestBody(c, responsesBody, account, upstreamModel); compactErr != nil {
+		logger.L().Warn("grok chat_completions: context compaction skipped",
+			zap.Int64("account_id", account.ID),
+			zap.String("upstream_model", upstreamModel),
+			zap.Error(compactErr),
+		)
+	} else {
+		responsesBody = compactedBody
 	}
 	responsesBody, err = applyGrokResponsesCacheIdentity(responsesBody, intentBody, cacheIdentity, true)
 	if err != nil {

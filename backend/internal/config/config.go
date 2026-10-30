@@ -1162,6 +1162,18 @@ type GatewayGrokConfig struct {
 	// FreeQuotaStatsCacheSeconds is the soft-gate stats cache TTL. Hot path never
 	// waits on usage_logs; misses fail open and refresh asynchronously.
 	FreeQuotaStatsCacheSeconds int `mapstructure:"free_quota_stats_cache_seconds"`
+	// ContextCompactionEnabled trims oversized Grok request histories so a turn
+	// stays under xAI's flat-price long-context threshold (200k input tokens).
+	ContextCompactionEnabled bool `mapstructure:"context_compaction_enabled"`
+	// ContextCompactionTriggerTokens is the estimated input size that starts a
+	// trim. Set it to or above the pricing threshold so a turn that would be
+	// billed at the long-context multiplier gets compacted instead.
+	ContextCompactionTriggerTokens int `mapstructure:"context_compaction_trigger_tokens"`
+	// ContextCompactionTargetTokens is the input budget a trimmed turn aims for.
+	// Compacting deeply is cheaper than compacting just under the trigger: the
+	// trim invalidates the cached prefix once, and every later turn then shares
+	// the smaller prefix.
+	ContextCompactionTargetTokens int `mapstructure:"context_compaction_target_tokens"`
 }
 
 // GatewayCNProvidersConfig 国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）的余额检测配置。
@@ -2510,6 +2522,12 @@ func setDefaults() {
 	viper.SetDefault("gateway.grok.free_quota_soft_gate_percent", 95)
 	viper.SetDefault("gateway.grok.free_quota_window_hours", 24)
 	viper.SetDefault("gateway.grok.free_quota_stats_cache_seconds", 60)
+	// Grok request-side context compaction. xAI bills the whole request at 2x once
+	// input reaches 200k tokens, while the model window is 500k, so clients never
+	// compact early enough to avoid it.
+	viper.SetDefault("gateway.grok.context_compaction_enabled", false)
+	viper.SetDefault("gateway.grok.context_compaction_trigger_tokens", 200_000)
+	viper.SetDefault("gateway.grok.context_compaction_target_tokens", 110_000)
 	// 国产供应商余额检测（kimi/deepseek payg；zhipu 无余额端点，仅靠响应式 429/402）。
 	viper.SetDefault("gateway.cn_providers.balance_check_enabled", true)
 	viper.SetDefault("gateway.cn_providers.balance_threshold", 0.5)
@@ -3771,6 +3789,17 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.Grok.FreeQuotaStatsCacheSeconds < 0 {
 		return fmt.Errorf("gateway.grok.free_quota_stats_cache_seconds must be non-negative")
+	}
+	if c.Gateway.Grok.ContextCompactionEnabled {
+		if c.Gateway.Grok.ContextCompactionTriggerTokens <= 0 {
+			return fmt.Errorf("gateway.grok.context_compaction_trigger_tokens must be positive")
+		}
+		if c.Gateway.Grok.ContextCompactionTargetTokens <= 0 {
+			return fmt.Errorf("gateway.grok.context_compaction_target_tokens must be positive")
+		}
+		if c.Gateway.Grok.ContextCompactionTargetTokens >= c.Gateway.Grok.ContextCompactionTriggerTokens {
+			return fmt.Errorf("gateway.grok.context_compaction_target_tokens must be lower than context_compaction_trigger_tokens")
+		}
 	}
 	if err := ValidateDingTalkConfig(c.DingTalk); err != nil {
 		return fmt.Errorf("dingtalk_connect: %w", err)
