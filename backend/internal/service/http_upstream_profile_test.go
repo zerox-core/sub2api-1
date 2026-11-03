@@ -27,6 +27,15 @@ func TestWithHTTPUpstreamProfile_LongStream(t *testing.T) {
 	}
 }
 
+// Antigravity 的 profile 必须能穿过 context 白名单，否则会被静默降级为 default，
+// 长上下文请求又会回到「等首字节超过 60s 就被隧道掐断」的老路上。
+func TestWithHTTPUpstreamProfile_Antigravity(t *testing.T) {
+	ctx := WithHTTPUpstreamProfile(context.TODO(), HTTPUpstreamProfileAntigravity)
+	if profile := HTTPUpstreamProfileFromContext(ctx); profile != HTTPUpstreamProfileAntigravity {
+		t.Fatalf("expected profile %q, got %q", HTTPUpstreamProfileAntigravity, profile)
+	}
+}
+
 func TestWithHTTPUpstreamRedirectsDisabled(t *testing.T) {
 	//nolint:staticcheck // Exercises the defensive nil-context fallback.
 	ctx := WithHTTPUpstreamRedirectsDisabled(nil)

@@ -5,6 +5,7 @@ package tlsfingerprint
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"log/slog"
@@ -36,6 +37,7 @@ type Profile struct {
 type Dialer struct {
 	profile    *Profile
 	baseDialer func(ctx context.Context, network, addr string) (net.Conn, error)
+	enableH2   bool
 }
 
 // HTTPProxyDialer creates TLS connections through HTTP/HTTPS proxies with custom fingerprints.
@@ -43,6 +45,7 @@ type Dialer struct {
 type HTTPProxyDialer struct {
 	profile  *Profile
 	proxyURL *url.URL
+	enableH2 bool
 }
 
 // SOCKS5ProxyDialer creates TLS connections through SOCKS5 proxies with custom fingerprints.
@@ -50,6 +53,7 @@ type HTTPProxyDialer struct {
 type SOCKS5ProxyDialer struct {
 	profile  *Profile
 	proxyURL *url.URL
+	enableH2 bool
 }
 
 // Default TLS fingerprint values captured from Claude Code (Node.js 24.x)
@@ -138,6 +142,31 @@ func NewSOCKS5ProxyDialer(profile *Profile, proxyURL *url.URL) *SOCKS5ProxyDiale
 	return &SOCKS5ProxyDialer{profile: profile, proxyURL: proxyURL}
 }
 
+// WithHTTP2 makes the dialer negotiate HTTP/2 and expose the negotiated state
+// to net/http, which is what allows the transport to run PING health checks.
+//
+// Without this every fingerprinted connection stays on HTTP/1.1 no matter what
+// the transport requests: net/http only detects HTTP/2 through the ALPN result
+// of the connection it is handed, and the raw *utls.UConn does not implement
+// tls.ConnectionState. Callers that need keepalive on a silent long wait must
+// enable this; it is off by default to preserve existing fingerprints.
+func (d *Dialer) WithHTTP2() *Dialer {
+	d.enableH2 = true
+	return d
+}
+
+// WithHTTP2 enables HTTP/2 negotiation for the HTTP proxy dialer.
+func (d *HTTPProxyDialer) WithHTTP2() *HTTPProxyDialer {
+	d.enableH2 = true
+	return d
+}
+
+// WithHTTP2 enables HTTP/2 negotiation for the SOCKS5 proxy dialer.
+func (d *SOCKS5ProxyDialer) WithHTTP2() *SOCKS5ProxyDialer {
+	d.enableH2 = true
+	return d
+}
+
 // DialTLSContext establishes a TLS connection through SOCKS5 proxy with the configured fingerprint.
 // Flow: SOCKS5 CONNECT to target -> TLS handshake with utls on the tunnel
 func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -176,7 +205,7 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 	slog.Debug("tls_fingerprint_socks5_tunnel_established")
 
 	// Step 3: Perform TLS handshake on the tunnel with utls fingerprint
-	return performTLSHandshake(ctx, conn, d.profile, addr)
+	return performTLSHandshake(ctx, conn, d.profile, addr, d.enableH2)
 }
 
 // DialTLSContext establishes a TLS connection through HTTP proxy with the configured fingerprint.
@@ -247,7 +276,7 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 	slog.Debug("tls_fingerprint_http_proxy_tunnel_established")
 
 	// Step 4: Perform TLS handshake on the tunnel with utls fingerprint
-	return performTLSHandshake(ctx, conn, d.profile, addr)
+	return performTLSHandshake(ctx, conn, d.profile, addr, d.enableH2)
 }
 
 // DialTLSContext establishes a TLS connection with the configured fingerprint.
@@ -263,19 +292,26 @@ func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.
 	slog.Debug("tls_fingerprint_tcp_connected", "addr", addr)
 
 	// Perform TLS handshake with utls fingerprint
-	return performTLSHandshake(ctx, conn, d.profile, addr)
+	return performTLSHandshake(ctx, conn, d.profile, addr, d.enableH2)
 }
 
 // performTLSHandshake performs the uTLS handshake on an established connection.
 // It builds a ClientHello spec from the profile, applies it, and completes the handshake.
 // On failure, conn is closed and an error is returned.
-func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, addr string) (net.Conn, error) {
+//
+// enableH2 makes it advertise ALPN "h2" ahead of "http/1.1" and wrap the
+// returned connection so net/http can read the negotiated protocol. See
+// WithHTTP2 for why both halves are required.
+func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, addr string, enableH2 bool) (net.Conn, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
 	}
 
 	spec := buildClientHelloSpecFromProfile(profile)
+	if enableH2 {
+		spec = withHTTP2ALPN(spec)
+	}
 	tlsConn := utls.UClient(conn, &utls.Config{ServerName: host}, utls.HelloCustom)
 
 	if err := tlsConn.ApplyPreset(spec); err != nil {
@@ -295,7 +331,49 @@ func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, a
 		"cipher_suite", state.CipherSuite,
 		"alpn", state.NegotiatedProtocol)
 
-	return tlsConn, nil
+	if !enableH2 {
+		return tlsConn, nil
+	}
+	return &connectionStateConn{Conn: tlsConn, state: state}, nil
+}
+
+// connectionStateConn exposes the uTLS handshake result through the
+// crypto/tls interface net/http asserts on. Returning the bare *utls.UConn
+// instead makes net/http fall back to HTTP/1.1 (and fails outright when the
+// transport has HTTP/2 forced).
+type connectionStateConn struct {
+	net.Conn
+	state utls.ConnectionState
+}
+
+func (c *connectionStateConn) ConnectionState() tls.ConnectionState {
+	return tls.ConnectionState{
+		Version:                     c.state.Version,
+		HandshakeComplete:           c.state.HandshakeComplete,
+		DidResume:                   c.state.DidResume,
+		CipherSuite:                 c.state.CipherSuite,
+		NegotiatedProtocol:          c.state.NegotiatedProtocol,
+		NegotiatedProtocolIsMutual:  c.state.NegotiatedProtocol != "",
+		ServerName:                  c.state.ServerName,
+		PeerCertificates:            c.state.PeerCertificates,
+		VerifiedChains:              c.state.VerifiedChains,
+		SignedCertificateTimestamps: c.state.SignedCertificateTimestamps,
+		OCSPResponse:                c.state.OCSPResponse,
+		TLSUnique:                   c.state.TLSUnique,
+	}
+}
+
+// withHTTP2ALPN puts "h2" first in the ALPN extension so the server selects
+// HTTP/2, keeping the rest of the fingerprint intact.
+func withHTTP2ALPN(spec *utls.ClientHelloSpec) *utls.ClientHelloSpec {
+	for _, ext := range spec.Extensions {
+		if alpn, ok := ext.(*utls.ALPNExtension); ok {
+			alpn.AlpnProtocols = []string{"h2", "http/1.1"}
+			return spec
+		}
+	}
+	spec.Extensions = append(spec.Extensions, &utls.ALPNExtension{AlpnProtocols: []string{"h2", "http/1.1"}})
+	return spec
 }
 
 // toUTLSCurves converts uint16 slice to utls.CurveID slice.

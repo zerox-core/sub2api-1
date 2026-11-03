@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -93,6 +94,7 @@ func TestBuildUpstreamTransport_NegotiatesExpectedProtocol(t *testing.T) {
 	}{
 		{upstreamProtocolModeOpenAIH2, 2},
 		{upstreamProtocolModeLongStreamH2, 2},
+		{upstreamProtocolModeAntigravityH2, 2},
 		{upstreamProtocolModeDefault, 1},
 		{upstreamProtocolModeGrok, 1},
 		{upstreamProtocolModeOpenAIH1, 1},
@@ -124,13 +126,54 @@ func TestBuildUpstreamTransport_NegotiatesExpectedProtocol(t *testing.T) {
 func TestBuildUpstreamTransport_HTTP2_WithHTTPProxy_EnablesKeepAlive(t *testing.T) {
 	proxyURL, err := url.Parse("http://127.0.0.1:8080")
 	require.NoError(t, err)
-	for _, mode := range []string{upstreamProtocolModeOpenAIH2, upstreamProtocolModeLongStreamH2} {
+	for _, mode := range []string{upstreamProtocolModeOpenAIH2, upstreamProtocolModeLongStreamH2, upstreamProtocolModeAntigravityH2} {
 		t.Run(mode, func(t *testing.T) {
 			tr, err := buildUpstreamTransport(http2KeepAliveTestPoolSettings(), proxyURL, mode)
 			require.NoError(t, err)
 			require.True(t, tr.ForceAttemptHTTP2)
 			requireHTTP2Configured(t, tr, "经代理的 H2 模式也必须启用 http2 keepalive")
 			require.NotNil(t, tr.Proxy, "HTTP 代理仍须通过 Transport.Proxy 生效")
+		})
+	}
+}
+
+// Antigravity 上游在长上下文请求上要 40-110s 才吐首字节，而出境隧道静默约 60s 就掐断，
+// 于是 Go 只看到 EOF / tls: bad record MAC，重试三次后整体 502。修复的关键是让它走
+// HTTP/2 并开启 PING：等首字节期间连接上有帧流动，隧道不再判定为静默。
+func TestAntigravityProfile_UsesHTTP2WithPing(t *testing.T) {
+	tr, err := buildUpstreamTransport(http2KeepAliveTestPoolSettings(), nil, upstreamProtocolModeAntigravityH2)
+	require.NoError(t, err)
+	require.True(t, tr.ForceAttemptHTTP2, "antigravity_h2 必须启用 HTTP/2")
+	requireHTTP2Configured(t, tr, "antigravity_h2 必须显式配置 http2 以启用 ReadIdleTimeout")
+}
+
+// TLS 指纹路径（账号 enable_tls_fingerprint）必须与普通路径拿到同样的 h2 保活，
+// 否则开着指纹的账号仍然会被 60s 掐断。
+func TestBuildUpstreamTransportWithTLSFingerprint_AntigravityEnablesH2(t *testing.T) {
+	profile := &tlsfingerprint.Profile{Name: "antigravity-test"}
+	proxyURL, err := url.Parse("http://127.0.0.1:7890")
+	require.NoError(t, err)
+
+	tr, err := buildUpstreamTransportWithTLSFingerprint(http2KeepAliveTestPoolSettings(), proxyURL, profile, upstreamProtocolModeAntigravityH2)
+	require.NoError(t, err)
+	require.True(t, tr.ForceAttemptHTTP2, "antigravity_h2 必须启用 HTTP/2，以便 http2.Transport 发 PING")
+	requireHTTP2Configured(t, tr, "antigravity_h2 必须显式配置 http2 以启用 ReadIdleTimeout")
+	require.NotNil(t, tr.DialTLSContext, "指纹路径仍须使用自定义 DialTLSContext")
+
+	// 其他模式保持原状：不开 h2，也不配置保活。
+	for _, tc := range []struct {
+		name string
+		mode string
+	}{
+		{"default", upstreamProtocolModeDefault},
+		{"openai_h2", upstreamProtocolModeOpenAIH2},
+		{"long_stream_h2", upstreamProtocolModeLongStreamH2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr, err := buildUpstreamTransportWithTLSFingerprint(http2KeepAliveTestPoolSettings(), proxyURL, profile, tc.mode)
+			require.NoError(t, err)
+			require.False(t, tr.ForceAttemptHTTP2, "指纹路径只对 antigravity_h2 开放 HTTP/2")
+			require.Nil(t, tr.Protocols, "非 antigravity_h2 不应配置 http2 keepalive")
 		})
 	}
 }

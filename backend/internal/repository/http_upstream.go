@@ -104,6 +104,12 @@ const (
 	upstreamProtocolModeOpenAIH2         = "openai_h2"
 	upstreamProtocolModeOpenAIH1Fallback = "openai_h1_fallback"
 	upstreamProtocolModeGrok             = "grok"
+	// upstreamProtocolModeAntigravityH2 keeps an HTTP/2 connection alive with
+	// PING health checks while the request waits for its first byte. Antigravity
+	// long-context requests regularly take 40-110s to respond, and the egress
+	// tunnel drops a connection that stays silent for ~60s; without PING the
+	// request dies with EOF / "tls: bad record MAC" and burns a retry.
+	upstreamProtocolModeAntigravityH2 = "antigravity_h2"
 )
 
 var errUpstreamClientLimitReached = errors.New("upstream client cache limit reached")
@@ -561,9 +567,10 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	}
 	settings := s.resolvePoolSettings(isolation, accountConcurrency)
 	settings = s.applyProfilePoolSettings(settings, upstreamProfile)
+	protocolMode := s.resolveProtocolMode(upstreamProfile, proxyKey, parsedProxy)
 	// TLS 指纹客户端使用独立的缓存键，加 "tls:" 前缀
-	cacheKey := "tls:" + buildCacheKey(isolation, proxyKey, accountID, upstreamProtocolModeDefault)
-	poolKey := buildPoolKey(settings, upstreamProtocolModeDefault) + ":tls"
+	cacheKey := "tls:" + buildCacheKey(isolation, proxyKey, accountID, protocolMode)
+	poolKey := buildPoolKey(settings, protocolMode) + ":tls"
 
 	now := time.Now()
 	nowUnix := now.UnixNano()
@@ -614,7 +621,7 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 
 	// 创建带 TLS 指纹的 Transport
 	slog.Debug("tls_fingerprint_creating_new_client", "account_id", accountID, "cache_key", cacheKey, "proxy", proxyKey)
-	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, profile)
+	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, profile, protocolMode)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("build TLS fingerprint transport: %w", err)
@@ -626,9 +633,10 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	}
 
 	entry := &upstreamClientEntry{
-		client:   client,
-		proxyKey: proxyKey,
-		poolKey:  poolKey,
+		client:       client,
+		proxyKey:     proxyKey,
+		poolKey:      poolKey,
+		protocolMode: protocolMode,
 	}
 	atomic.StoreInt64(&entry.lastUsed, nowUnix)
 	if markInFlight {
@@ -982,6 +990,12 @@ func (s *httpUpstreamService) applyProfilePoolSettings(settings poolSettings, pr
 		if s != nil && s.cfg != nil {
 			settings.responseHeaderTimeout = time.Duration(s.cfg.Gateway.GrokResponseHeaderTimeout) * time.Second
 		}
+	case service.HTTPUpstreamProfileAntigravity:
+		// Antigravity long-context requests legitimately take 40-110s to produce
+		// their first byte. The transport keeps the connection alive with HTTP/2
+		// PINGs; this bound only stops a wedged request from holding a slot
+		// forever.
+		settings.responseHeaderTimeout = 300 * time.Second
 	}
 	return settings
 }
@@ -1065,6 +1079,9 @@ func (s *httpUpstreamService) resolveProtocolMode(profile service.HTTPUpstreamPr
 	}
 	if profile == service.HTTPUpstreamProfileGrok {
 		return upstreamProtocolModeGrok
+	}
+	if profile == service.HTTPUpstreamProfileAntigravity {
+		return upstreamProtocolModeAntigravityH2
 	}
 	if profile != service.HTTPUpstreamProfileOpenAI {
 		return upstreamProtocolModeDefault
@@ -1388,7 +1405,7 @@ func buildUpstreamTransport(settings poolSettings, proxyURL *url.URL, protocolMo
 		ResponseHeaderTimeout: settings.responseHeaderTimeout,
 	}
 	switch protocolMode {
-	case upstreamProtocolModeLongStreamH2, upstreamProtocolModeOpenAIH2:
+	case upstreamProtocolModeLongStreamH2, upstreamProtocolModeOpenAIH2, upstreamProtocolModeAntigravityH2:
 		transport.ForceAttemptHTTP2 = true
 		// 显式配置 http2 并启用 PING 健康探测，剔除代理/NAT 静默掐断的死连接，
 		// 避免请求挂在死连接上直到 TCP 重传超时（分钟级）。
@@ -1436,6 +1453,7 @@ func enableHTTP2KeepAlive(transport *http.Transport, protocolMode string) (*http
 //   - settings: 连接池配置
 //   - proxyURL: 代理 URL（nil 表示直连）
 //   - profile: TLS 指纹配置
+//   - protocolMode: 协议模式；antigravity_h2 时启用 HTTP/2 并开启 PING 保活
 //
 // 返回:
 //   - *http.Transport: 配置好的 Transport 实例
@@ -1445,7 +1463,8 @@ func enableHTTP2KeepAlive(transport *http.Transport, protocolMode string) (*http
 //   - nil/空: 直连，使用 TLSFingerprintDialer
 //   - http/https: HTTP 代理，使用 HTTPProxyDialer（CONNECT 隧道 + utls 握手）
 //   - socks5: SOCKS5 代理，使用 SOCKS5ProxyDialer（SOCKS5 隧道 + utls 握手）
-func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile) (*http.Transport, error) {
+func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile, protocolMode string) (*http.Transport, error) {
+	enableH2 := protocolMode == upstreamProtocolModeAntigravityH2
 	transport := &http.Transport{
 		MaxIdleConns:          settings.maxIdleConns,
 		MaxIdleConnsPerHost:   settings.maxIdleConnsPerHost,
@@ -1453,7 +1472,14 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 		IdleConnTimeout:       settings.idleConnTimeout,
 		ResponseHeaderTimeout: settings.responseHeaderTimeout,
 		// 禁用默认的 TLS，我们使用自定义的 DialTLSContext
-		ForceAttemptHTTP2: false,
+		ForceAttemptHTTP2: enableH2,
+	}
+	if enableH2 {
+		// The fingerprint dialer advertises h2 itself, so net/http must also be
+		// told the connection is HTTP/2-capable for PING health checks to run.
+		if _, err := enableHTTP2KeepAlive(transport, protocolMode); err != nil {
+			return nil, err
+		}
 	}
 
 	// 根据代理类型选择合适的 TLS 指纹 Dialer
@@ -1461,6 +1487,9 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 		// 直连：使用 TLSFingerprintDialer
 		slog.Debug("tls_fingerprint_transport_direct")
 		dialer := tlsfingerprint.NewDialer(profile, nil)
+		if enableH2 {
+			dialer = dialer.WithHTTP2()
+		}
 		transport.DialTLSContext = dialer.DialTLSContext
 	} else {
 		scheme := strings.ToLower(proxyURL.Scheme)
@@ -1469,15 +1498,21 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 			// SOCKS5 代理：使用 SOCKS5ProxyDialer
 			slog.Debug("tls_fingerprint_transport_socks5", "proxy", proxyURL.Host)
 			socks5Dialer := tlsfingerprint.NewSOCKS5ProxyDialer(profile, proxyURL)
+			if enableH2 {
+				socks5Dialer = socks5Dialer.WithHTTP2()
+			}
 			transport.DialTLSContext = socks5Dialer.DialTLSContext
 		case "https":
 			// The fingerprint dialer emits a plaintext CONNECT preface and cannot
 			// establish TLS to an HTTPS proxy. Keep proxy routing via net/http.
-			return buildUpstreamTransport(settings, proxyURL, upstreamProtocolModeDefault)
+			return buildUpstreamTransport(settings, proxyURL, protocolMode)
 		case "http":
 			// HTTP/HTTPS 代理：使用 HTTPProxyDialer（CONNECT 隧道）
 			slog.Debug("tls_fingerprint_transport_http_connect", "proxy", proxyURL.Host)
 			httpDialer := tlsfingerprint.NewHTTPProxyDialer(profile, proxyURL)
+			if enableH2 {
+				httpDialer = httpDialer.WithHTTP2()
+			}
 			transport.DialTLSContext = httpDialer.DialTLSContext
 		default:
 			// 未知代理类型，回退到普通代理配置（无 TLS 指纹）

@@ -548,6 +548,11 @@ urlFallbackLoop:
 			if err != nil {
 				return nil, err
 			}
+			// Antigravity upstreams routinely take 40-110s to emit a first byte on
+			// long-context requests. The egress tunnel drops any connection that
+			// stays silent for ~60s, so ask for the HTTP/2 + PING transport that
+			// keeps the connection provably alive during that wait.
+			upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileAntigravity))
 
 			// 数据面出站统一走 TLS 指纹（p.tlsProfile 由账号 enable_tls_fingerprint 配置解析；
 			// nil 时 DoWithTLS 行为与 Do 完全一致）
