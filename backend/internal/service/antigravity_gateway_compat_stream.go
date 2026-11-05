@@ -120,7 +120,7 @@ type antigravityCompatStreamSession struct {
 }
 
 const (
-	antigravityCompatPreContentKeepaliveInterval = 15 * time.Second
+	antigravityCompatPreContentKeepaliveInterval = 30 * time.Second
 	// Allow slow first tokens, but do not let comment-only streams reset the idle timer forever.
 	antigravityCompatPreContentMaxWait = 2 * time.Minute
 )
@@ -169,6 +169,13 @@ func (s *antigravityCompatStreamSession) finish() (*antigravityStreamResult, err
 	mergeAntigravityCompatUsage(s.usage, usage)
 	s.consumeClaudeEvents(finalEvents)
 	if !s.hasMeaningfulData() && !s.writer.Disconnected() {
+		if s.processor.HasMalformedFunctionCall() {
+			return s.result(false), &UpstreamFailoverError{
+				StatusCode:             http.StatusBadGateway,
+				ResponseBody:           []byte(`{"error":"malformed function call from upstream"}`),
+				RetryableOnSameAccount: false,
+			}
+		}
 		if s.preContentKeepaliveSent {
 			s.adapter.WriteError(s.writer, "empty_stream")
 			return s.result(false), errors.New("empty Antigravity compatibility stream after keepalive")

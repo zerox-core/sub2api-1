@@ -36,11 +36,12 @@ type StreamingProcessor struct {
 	usageMapHook      UsageMapHook
 
 	// 累计 usage
-	inputTokens       int
-	outputTokens      int
-	cacheReadTokens   int
-	imageOutputTokens int
-	hasContent        bool
+	inputTokens           int
+	outputTokens          int
+	cacheReadTokens       int
+	imageOutputTokens     int
+	hasContent            bool
+	malformedFunctionCall bool
 }
 
 // NewStreamingProcessor 创建流式响应处理器
@@ -133,6 +134,7 @@ func (p *StreamingProcessor) ProcessLine(line string) []byte {
 	if len(geminiResp.Candidates) > 0 {
 		finishReason := geminiResp.Candidates[0].FinishReason
 		if finishReason == "MALFORMED_FUNCTION_CALL" {
+			p.malformedFunctionCall = true
 			log.Printf("[Antigravity] MALFORMED_FUNCTION_CALL detected in stream for model %s", p.originalModel)
 			if geminiResp.Candidates[0].Content != nil {
 				if b, err := json.Marshal(geminiResp.Candidates[0].Content); err == nil {
@@ -179,6 +181,11 @@ func (p *StreamingProcessor) MessageStartSent() bool {
 // HasContent reports whether any substantive text, thinking, or tool calls were emitted.
 func (p *StreamingProcessor) HasContent() bool {
 	return p.hasContent
+}
+
+// HasMalformedFunctionCall reports an upstream tool-call generation failure.
+func (p *StreamingProcessor) HasMalformedFunctionCall() bool {
+	return p.malformedFunctionCall
 }
 
 // emitMessageStart 发送 message_start 事件
