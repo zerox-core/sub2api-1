@@ -233,7 +233,7 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 	lastDataAt := time.Now()
 
 	flusher, _ := c.Writer.(http.Flusher)
-	cw := newAntigravityClientWriter(c.Writer, flusher, "antigravity upstream")
+	cw := newAntigravityClientWriter(c.Writer, flusher, "antigravity upstream").WithContext(c)
 
 	for {
 		select {
@@ -289,7 +289,7 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 			}
 			// SSE ping 事件：Anthropic 原生格式，客户端会正确处理，
 			// 同时保持连接活跃防止 Cloudflare Tunnel 等代理断开
-			if !cw.Fprintf("event: ping\ndata: {\"type\": \"ping\"}\n\n") {
+			if !cw.FprintfKeepalive("event: ping\ndata: {\"type\": \"ping\"}\n\n") {
 				logger.LegacyPrintf("service.antigravity_gateway", "Client disconnected during keepalive ping (antigravity upstream), continuing to drain upstream for billing")
 				continue
 			}

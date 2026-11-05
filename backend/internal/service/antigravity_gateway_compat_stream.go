@@ -154,14 +154,13 @@ func (s *antigravityCompatStreamSession) hasMeaningfulData() bool {
 }
 
 func (s *antigravityCompatStreamSession) writePreContentKeepalive(now time.Time) {
-	// Intentional tradeoff: this commits HTTP 200 once the interval elapses, so
-	// later upstream failures cannot fail over; report them as SSE errors to the
-	// client instead. The interval is kept above the observed malformed-function-call
-	// window so recoverable failures still route to another account.
+	// 首字节前的保活只是为了让代理/客户端不因空闲掐断连接，它不构成语义响应。
+	// 心跳字节通过 WriteKeepalive 登记到 gin.Context，换号判定会用
+	// AntigravityKeepaliveAdjustedWrittenSize 把它扣除，因此保活不会关闭换号通道。
 	if s.hasMeaningfulData() || s.writer.Disconnected() || now.Sub(s.startTime) < s.preContentKeepaliveInterval {
 		return
 	}
-	if s.writer.Write([]byte(": ping\n\n")) {
+	if s.writer.WriteKeepalive([]byte(": ping\n\n")) {
 		s.preContentKeepaliveSent = true
 	}
 }
@@ -178,10 +177,8 @@ func (s *antigravityCompatStreamSession) finish() (*antigravityStreamResult, err
 				RetryableOnSameAccount: false,
 			}
 		}
-		if s.preContentKeepaliveSent {
-			s.adapter.WriteError(s.writer, "empty_stream")
-			return s.result(false), errors.New("empty Antigravity compatibility stream after keepalive")
-		}
+		// 即使已经发过首字节前心跳，也必须能换号：客户端只收到 SSE 注释，
+		// 真正的错误帧由 handler 在换号全部失败后统一补写。
 		return nil, antigravityCompatEmptyStreamError()
 	}
 	s.adapter.Finalize(s.writer)
@@ -303,7 +300,7 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithKeepaliveIn
 		return nil, errors.New("streaming not supported")
 	}
 
-	writer := newAntigravityClientWriter(c.Writer, flusher, prefix)
+	writer := newAntigravityClientWriter(c.Writer, flusher, prefix).WithContext(c)
 	writer.beforeFirstWrite = func() {
 		c.Header("Content-Type", "text/event-stream")
 		c.Header("Cache-Control", "no-cache")
@@ -339,10 +336,8 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithKeepaliveIn
 	deadlineTimer := time.NewTimer(deadlineDelay)
 	defer deadlineTimer.Stop()
 	preContentTimeout := func() (*antigravityStreamResult, error) {
-		if session.preContentKeepaliveSent {
-			writeAntigravityCompatStreamError(c, adapter, writer, "stream_timeout")
-			return session.collectResult(false), fmt.Errorf("pre-content stream timeout")
-		}
+		// 首字节前超时说明上游始终没给出内容。此前的保活只是 SSE 注释，
+		// 换号判定会扣除这些心跳字节，因此这里必须继续换号而不是就地报错。
 		return nil, antigravityCompatEmptyStreamError()
 	}
 
@@ -378,7 +373,7 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithKeepaliveIn
 
 		case <-keepaliveCh:
 			if session.hasMeaningfulData() && !writer.Disconnected() {
-				writer.Write([]byte(": ping\n\n"))
+				writer.WriteKeepalive([]byte(": ping\n\n"))
 			}
 		case now := <-preContentTimer.C:
 			if !session.hasMeaningfulData() && !writer.Disconnected() && !now.Before(preContentDeadline) {
@@ -397,10 +392,7 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithKeepaliveIn
 }
 
 func handleAntigravityCompatEmptyStream(c *gin.Context, session *antigravityCompatStreamSession) (*antigravityStreamResult, error) {
-	if session.preContentKeepaliveSent {
-		writeAntigravityCompatStreamError(c, session.adapter, session.writer, "empty_stream")
-		return session.collectResult(false), errors.New("empty Antigravity compatibility stream after keepalive")
-	}
+	// 上游结束但没有任何语义内容：无论此前是否发过首字节前心跳，都应换号。
 	return nil, antigravityCompatEmptyStreamError()
 }
 
@@ -488,10 +480,8 @@ func (s *AntigravityGatewayService) handleAntigravityCompatReadError(
 	prefix string,
 ) (*antigravityStreamResult, error) {
 	if !session.hasMeaningfulData() && !session.writer.Disconnected() {
-		if session.preContentKeepaliveSent {
-			writeAntigravityCompatStreamError(c, session.adapter, session.writer, "stream_read_error")
-			return session.collectResult(false), fmt.Errorf("stream read error: %w", err)
-		}
+		// 首字节前读错误同样可换号：已写出的只有 SSE 注释心跳，
+		// 换号判定用 AntigravityKeepaliveAdjustedWrittenSize 扣除了它们。
 		return nil, antigravityCompatEmptyStreamError()
 	}
 	if disconnect, handled := handleStreamReadError(err, session.writer.Disconnected(), prefix); handled {

@@ -50,10 +50,35 @@ type antigravityClientWriter struct {
 	disconnected     bool
 	prefix           string // 日志前缀，标识来源方法
 	beforeFirstWrite func()
+	// ctx 用于把心跳字节登记到请求上下文，供 AntigravityKeepaliveAdjustedWrittenSize
+	// 在换号判定里扣除。为空时心跳仍然照发，只是不登记。
+	ctx *gin.Context
 }
 
 func newAntigravityClientWriter(w gin.ResponseWriter, flusher http.Flusher, prefix string) *antigravityClientWriter {
 	return &antigravityClientWriter{w: w, flusher: flusher, prefix: prefix}
+}
+
+// WithContext 绑定请求上下文，使心跳字节可被换号判定扣除。
+func (cw *antigravityClientWriter) WithContext(c *gin.Context) *antigravityClientWriter {
+	cw.ctx = c
+	return cw
+}
+
+// WriteKeepalive 写出一段纯心跳（SSE 注释或 Anthropic ping 事件），并把字节数
+// 登记到请求上下文。心跳不构成语义响应，换号判定不得因它失效。
+func (cw *antigravityClientWriter) WriteKeepalive(p []byte) bool {
+	if !cw.Write(p) {
+		return false
+	}
+	recordAntigravityStreamKeepaliveBytes(cw.ctx, len(p))
+	return true
+}
+
+// FprintfKeepalive 同 WriteKeepalive，用于格式化心跳。
+func (cw *antigravityClientWriter) FprintfKeepalive(format string, args ...any) bool {
+	payload := fmt.Sprintf(format, args...)
+	return cw.WriteKeepalive([]byte(payload))
 }
 
 // Write 写入数据到客户端，写入失败时标记断开并返回 false
@@ -213,7 +238,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 	}
 	lastDataAt := time.Now()
 
-	cw := newAntigravityClientWriter(c.Writer, flusher, "antigravity gemini")
+	cw := newAntigravityClientWriter(c.Writer, flusher, "antigravity gemini").WithContext(c)
 
 	// 仅发送一次错误事件，避免多次写入导致协议混乱
 	errorEventSent := false
@@ -323,8 +348,9 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 			if time.Since(lastDataAt) < keepaliveInterval {
 				continue
 			}
-			// SSE ping/keepalive：保持连接活跃防止 Cloudflare Tunnel 等代理断开
-			if !cw.Fprintf(":\n\n") {
+			// SSE ping/keepalive：保持连接活跃防止 Cloudflare Tunnel 等代理断开。
+			// 心跳字节不计入语义写出量，否则晚到的上游失败就无法换号。
+			if !cw.FprintfKeepalive(":\n\n") {
 				logger.LegacyPrintf("service.antigravity_gateway", "Client disconnected during keepalive ping (antigravity gemini), continuing to drain upstream for billing")
 				continue
 			}
@@ -1119,7 +1145,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 	}
 	lastDataAt := time.Now()
 
-	cw := newAntigravityClientWriter(c.Writer, flusher, "antigravity claude")
+	cw := newAntigravityClientWriter(c.Writer, flusher, "antigravity claude").WithContext(c)
 
 	// 仅发送一次错误事件，避免多次写入导致协议混乱
 	errorEventSent := false
@@ -1206,7 +1232,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 			}
 			// SSE ping 事件：Anthropic 原生格式，客户端会正确处理，
 			// 同时保持连接活跃防止 Cloudflare Tunnel 等代理断开
-			if !cw.Fprintf("event: ping\ndata: {\"type\": \"ping\"}\n\n") {
+			if !cw.FprintfKeepalive("event: ping\ndata: {\"type\": \"ping\"}\n\n") {
 				logger.LegacyPrintf("service.antigravity_gateway", "Client disconnected during keepalive ping (antigravity claude), continuing to drain upstream for billing")
 				continue
 			}

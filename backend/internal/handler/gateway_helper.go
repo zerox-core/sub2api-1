@@ -31,6 +31,13 @@ func gatewayStreamHasOnlyHeartbeats(c *gin.Context) bool {
 	if c == nil || c.Writer == nil {
 		return false
 	}
+	// Antigravity 的首字节前保活由 service 层写出，不经过 recordGatewayStreamHeartbeat。
+	// 这里统一走「扣除心跳后的真实写出量」口径：为 -1 且登记过心跳，说明只写过心跳。
+	if _, hasKeepalive := service.AntigravityStreamKeepaliveBytes(c); hasKeepalive {
+		if service.AntigravityKeepaliveAdjustedWrittenSize(c) < 0 {
+			return true
+		}
+	}
 	value, ok := c.Get(gatewayStreamHeartbeatBytesKey)
 	if !ok {
 		return false

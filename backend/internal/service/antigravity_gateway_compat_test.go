@@ -846,10 +846,9 @@ func TestAntigravityCompatHandlerPreContentKeepalive(t *testing.T) {
 		name    string
 		adapter func() antigravityCompatStreamAdapter
 		line    string
-		want    string
 	}{
-		{"silent chat", func() antigravityCompatStreamAdapter { return newAntigravityChatStreamAdapter("gemini-3.1-pro", false) }, "", `"upstream_error"`},
-		{"signature-only responses", func() antigravityCompatStreamAdapter { return newAntigravityResponsesStreamAdapter("gemini-3.1-pro") }, `data: {"response":{"candidates":[{"content":{"parts":[{"thoughtSignature":"sig","text":""}]}}]}}` + "\n\n", "event: error"},
+		{"silent chat", func() antigravityCompatStreamAdapter { return newAntigravityChatStreamAdapter("gemini-3.1-pro", false) }, ""},
+		{"signature-only responses", func() antigravityCompatStreamAdapter { return newAntigravityResponsesStreamAdapter("gemini-3.1-pro") }, `data: {"response":{"candidates":[{"content":{"parts":[{"thoughtSignature":"sig","text":""}]}}]}}` + "\n\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := newAntigravityCompatService(config.GatewayConfig{MaxLineSize: defaultMaxLineSize, StreamDataIntervalTimeout: 30}, nil)
@@ -876,9 +875,13 @@ func TestAntigravityCompatHandlerPreContentKeepalive(t *testing.T) {
 			}
 			require.Equal(t, ": ping\n\n", recorder.Body.String())
 			require.NoError(t, pipeWriter.Close())
-			require.Error(t, <-done)
-			require.Contains(t, recorder.Body.String(), tt.want)
-			require.True(t, IsResponseCommitted(c))
+			// 首字节前的保活只是 SSE 注释，不含语义内容。上游随后失败时必须仍然可以换号，
+			// 不能就地写错误帧（否则换号通道被心跳永久关闭）。
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, <-done, &failoverErr)
+			require.Equal(t, ": ping\n\n", recorder.Body.String())
+			require.False(t, IsResponseCommitted(c))
+			require.True(t, AntigravityKeepaliveAdjustedWrittenSize(c) < 0)
 		})
 	}
 }
@@ -901,10 +904,12 @@ func TestAntigravityCompatHandlerRepeatsPreContentKeepalive(t *testing.T) {
 	}()
 	time.Sleep(55 * time.Millisecond)
 	require.NoError(t, pipeWriter.Close())
-	require.Error(t, <-done)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, <-done, &failoverErr)
 	require.GreaterOrEqual(t, strings.Count(recorder.Body.String(), ": ping\n\n"), 3)
-	require.Contains(t, recorder.Body.String(), "event: error")
-	require.True(t, IsResponseCommitted(c))
+	// 重复心跳同样不构成语义输出：不得写错误帧，换号判定也不受影响。
+	require.NotContains(t, recorder.Body.String(), "event: error")
+	require.True(t, AntigravityKeepaliveAdjustedWrittenSize(c) < 0)
 }
 
 func TestAntigravityCompatHandlerPreContentDeadlineWithCommentOnlyStream(t *testing.T) {
@@ -936,15 +941,16 @@ func TestAntigravityCompatHandlerPreContentDeadlineWithCommentOnlyStream(t *test
 			}
 		}
 	}()
+	var failoverErr *UpstreamFailoverError
 	select {
 	case err := <-done:
-		require.ErrorContains(t, err, "pre-content stream timeout")
+		require.ErrorAs(t, err, &failoverErr)
 	case <-time.After(time.Second):
 		t.Fatal("comment-only stream exceeded pre-content deadline")
 	}
 	require.Contains(t, recorder.Body.String(), ": ping\n\n")
-	require.Contains(t, recorder.Body.String(), "event: error")
-	require.True(t, IsResponseCommitted(c))
+	require.NotContains(t, recorder.Body.String(), "event: error")
+	require.True(t, AntigravityKeepaliveAdjustedWrittenSize(c) < 0)
 	_ = pipeWriter.Close()
 }
 
@@ -971,10 +977,9 @@ func TestAntigravityCompatHandlerErrorsAfterPreContentPing(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		wait time.Duration
-		want string
 	}{
-		{"read error", time.Second, "stream_read_error"},
-		{"timeout", 25 * time.Millisecond, "stream_timeout"},
+		{"read error", time.Second},
+		{"timeout", 25 * time.Millisecond},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := newAntigravityCompatService(config.GatewayConfig{MaxLineSize: defaultMaxLineSize}, nil)
@@ -992,10 +997,14 @@ func TestAntigravityCompatHandlerErrorsAfterPreContentPing(t *testing.T) {
 			_, err := svc.handleAntigravityCompatStreamWithKeepaliveInterval(c, resp,
 				time.Now().Add(-20*time.Millisecond), "gemini-3.1-pro",
 				newAntigravityResponsesStreamAdapter("gemini-3.1-pro"), "test", 10*time.Millisecond, tc.wait)
-			require.Error(t, err)
+			// 心跳之后的读错误/超时都属于「上游没给出语义内容」，必须能换号：
+			// 不写错误帧、不提交响应，交给 handler 换到别的账号。
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, err, &failoverErr)
 			require.Contains(t, recorder.Body.String(), ": ping\n\n")
-			require.Contains(t, recorder.Body.String(), tc.want)
-			require.True(t, IsResponseCommitted(c))
+			require.NotContains(t, recorder.Body.String(), "event: error")
+			require.False(t, IsResponseCommitted(c))
+			require.True(t, AntigravityKeepaliveAdjustedWrittenSize(c) < 0)
 		})
 	}
 }
@@ -1005,14 +1014,13 @@ func TestAntigravityCompatEmptyAfterKeepaliveReportsStreamError(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		adapter antigravityCompatStreamAdapter
-		want    string
 	}{
-		{"chat completions", newAntigravityChatStreamAdapter("gemini-3.1-pro", false), `"upstream_error"`},
-		{"responses", newAntigravityResponsesStreamAdapter("gemini-3.1-pro"), "event: error"},
+		{"chat completions", newAntigravityChatStreamAdapter("gemini-3.1-pro", false)},
+		{"responses", newAntigravityResponsesStreamAdapter("gemini-3.1-pro")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c, recorder := newAntigravityCompatContext(http.MethodPost, "/", nil)
-			writer := newAntigravityClientWriter(c.Writer, c.Writer, "test")
+			writer := newAntigravityClientWriter(c.Writer, c.Writer, "test").WithContext(c)
 			writer.beforeFirstWrite = func() { c.Header("Content-Type", "text/event-stream") }
 			start := time.Now().Add(-antigravityCompatPreContentKeepaliveInterval - 5*time.Second)
 			session := newAntigravityCompatStreamSession("gemini-3.1-pro", start, tt.adapter, writer)
@@ -1020,12 +1028,14 @@ func TestAntigravityCompatEmptyAfterKeepaliveReportsStreamError(t *testing.T) {
 			session.writePreContentKeepalive(start.Add(antigravityCompatPreContentKeepaliveInterval))
 			require.True(t, session.preContentKeepaliveSent)
 			result, err := handleAntigravityCompatEmptyStream(c, session)
-			require.Error(t, err)
+			// 只有心跳、没有语义内容时仍然必须能换号（此前这里会就地写 empty_stream）。
 			var failoverErr *UpstreamFailoverError
-			require.NotErrorAs(t, err, &failoverErr)
-			require.NotNil(t, result)
-			require.True(t, IsResponseCommitted(c))
-			require.Contains(t, recorder.Body.String(), tt.want)
+			require.ErrorAs(t, err, &failoverErr)
+			require.True(t, failoverErr.RetryableOnSameAccount)
+			require.Nil(t, result)
+			require.Equal(t, ": ping\n\n", recorder.Body.String())
+			require.False(t, IsResponseCommitted(c))
+			require.True(t, AntigravityKeepaliveAdjustedWrittenSize(c) < 0)
 		})
 	}
 }

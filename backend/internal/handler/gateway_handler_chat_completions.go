@@ -283,7 +283,8 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 
 		// 5. Forward request
-		writerSizeBeforeForward := c.Writer.Size()
+		// 心跳字节不计入语义写出口径，否则 Antigravity 首字节前保活会永久关闭换号通道。
+		writerSizeBeforeForward := service.AntigravityKeepaliveAdjustedWrittenSize(c)
 		forwardBody := body
 		if channelMapping.Mapped {
 			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
@@ -320,7 +321,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
-				if c.Writer.Size() != writerSizeBeforeForward {
+				if service.AntigravityKeepaliveAdjustedWrittenSize(c) != writerSizeBeforeForward {
 					h.handleCCFailoverExhausted(c, failoverErr, true)
 					return
 				}
