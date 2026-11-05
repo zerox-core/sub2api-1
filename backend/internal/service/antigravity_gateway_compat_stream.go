@@ -154,8 +154,10 @@ func (s *antigravityCompatStreamSession) hasMeaningfulData() bool {
 }
 
 func (s *antigravityCompatStreamSession) writePreContentKeepalive(now time.Time) {
-	// Intentional tradeoff: this commits HTTP 200 after 15s, so later upstream
-	// failures cannot fail over; report them as SSE errors to the client instead.
+	// Intentional tradeoff: this commits HTTP 200 once the interval elapses, so
+	// later upstream failures cannot fail over; report them as SSE errors to the
+	// client instead. The interval is kept above the observed malformed-function-call
+	// window so recoverable failures still route to another account.
 	if s.hasMeaningfulData() || s.writer.Disconnected() || now.Sub(s.startTime) < s.preContentKeepaliveInterval {
 		return
 	}
