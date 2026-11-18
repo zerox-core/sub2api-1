@@ -1364,6 +1364,7 @@ func normalizeGeminiThinkingTierAlias(model string) string {
 		"gemini-4-argon",
 		"gemini-4-carbon",
 		"gemini-4-hydrogen",
+		"gemini-4-neon",
 	} {
 		for _, tier := range []string{"-high", "-low", "-medium", "-xhigh", "-tiered"} {
 			if model == baseModel+tier {

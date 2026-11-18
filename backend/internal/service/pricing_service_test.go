@@ -572,7 +572,7 @@ func TestPricingService_GeminiFlashThinkingTiersUseBasePricing(t *testing.T) {
 		OutputCostPerToken:      7.5e-6,
 		CacheReadInputTokenCost: 0.15e-6,
 	}
-	for _, baseModel := range []string{"gemini-3.7-flash", "gemini-3.8-flash", "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen"} {
+	for _, baseModel := range []string{"gemini-3.7-flash", "gemini-3.8-flash", "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-neon"} {
 		svc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{baseModel: basePricing}}
 		for _, tier := range []string{"", "-high", "-low", "-medium", "-xhigh", "-tiered"} {
 			model := baseModel + tier
@@ -587,7 +587,7 @@ func TestPricingService_GeminiFlashThinkingTiersUseBasePricing(t *testing.T) {
 func TestPricingService_GeminiFlashTierSpecificPricingTakesPrecedence(t *testing.T) {
 	basePricing := &LiteLLMModelPricing{InputCostPerToken: 1.5e-6}
 	tierPricing := &LiteLLMModelPricing{InputCostPerToken: 2e-6}
-	for _, baseModel := range []string{"gemini-3.7-flash", "gemini-3.8-flash", "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen"} {
+	for _, baseModel := range []string{"gemini-3.7-flash", "gemini-3.8-flash", "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-neon"} {
 		t.Run(baseModel, func(t *testing.T) {
 			svc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
 				baseModel:          basePricing,
@@ -612,6 +612,7 @@ func TestBillingService_Gemini4ThinkingTierFallbacksAreBillable(t *testing.T) {
 		{"gemini-4-argon", 2.0, 10.0, 0.1},
 		{"gemini-4-carbon", 2.0, 10.0, 0.1},
 		{"gemini-4-hydrogen", 1.5, 7.5, 0.075},
+		{"gemini-4-neon", 3.0, 15.0, 0.15},
 	}
 
 	for _, tc := range cases {
@@ -738,6 +739,7 @@ func TestDefaultPricingIncludesGemini4Rates(t *testing.T) {
 		{[]string{"gemini-4-argon", "gemini-4-argon-low", "gemini-4-argon-high"}, 2e-6, 10e-6, 0.1e-6},
 		{[]string{"gemini-4-carbon", "gemini-4-carbon-low", "gemini-4-carbon-high"}, 2e-6, 10e-6, 0.1e-6},
 		{[]string{"gemini-4-hydrogen", "gemini-4-hydrogen-low", "gemini-4-hydrogen-xhigh"}, 1.5e-6, 7.5e-6, 0.075e-6},
+		{[]string{"gemini-4-neon", "gemini-4-neon-low", "gemini-4-neon-xhigh"}, 3e-6, 15e-6, 0.15e-6},
 	}
 
 	for _, tc := range cases {

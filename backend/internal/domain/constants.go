@@ -151,6 +151,10 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"gemini-4-hydrogen-medium": "gemini-4-hydrogen-medium",
 	"gemini-4-hydrogen-high":   "gemini-4-hydrogen-high",
 	"gemini-4-hydrogen-xhigh":  "gemini-4-hydrogen-xhigh",
+	"gemini-4-neon-low":        "gemini-4-neon-low",
+	"gemini-4-neon-medium":     "gemini-4-neon-medium",
+	"gemini-4-neon-high":       "gemini-4-neon-high",
+	"gemini-4-neon-xhigh":      "gemini-4-neon-xhigh",
 	// Gemini 3 白名单
 	"gemini-3-flash":    "gemini-3-flash",
 	"gemini-3-pro-high": "gemini-3-pro-high",
