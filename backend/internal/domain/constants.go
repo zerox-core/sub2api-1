@@ -138,9 +138,19 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"gemini-2.5-flash-lite":          "gemini-2.5-flash-lite",
 	"gemini-2.5-flash-thinking":      "gemini-2.5-flash-thinking",
 	"gemini-2.5-pro":                 "gemini-2.5-pro",
-	// Gemini 4 Argon tiered models
-	"gemini-4-argon-low":    "gemini-4-argon-low",
-	"gemini-4-argon-medium": "gemini-4-argon-medium",
+	// Gemini 4 Argon / Carbon / Hydrogen tiered models
+	"gemini-4-argon-low":       "gemini-4-argon-low",
+	"gemini-4-argon-medium":    "gemini-4-argon-medium",
+	"gemini-4-argon-high":      "gemini-4-argon-high",
+	"gemini-4-argon-xhigh":     "gemini-4-argon-xhigh",
+	"gemini-4-carbon-low":      "gemini-4-carbon-low",
+	"gemini-4-carbon-medium":   "gemini-4-carbon-medium",
+	"gemini-4-carbon-high":     "gemini-4-carbon-high",
+	"gemini-4-carbon-xhigh":    "gemini-4-carbon-xhigh",
+	"gemini-4-hydrogen-low":    "gemini-4-hydrogen-low",
+	"gemini-4-hydrogen-medium": "gemini-4-hydrogen-medium",
+	"gemini-4-hydrogen-high":   "gemini-4-hydrogen-high",
+	"gemini-4-hydrogen-xhigh":  "gemini-4-hydrogen-xhigh",
 	// Gemini 3 白名单
 	"gemini-3-flash":    "gemini-3-flash",
 	"gemini-3-pro-high": "gemini-3-pro-high",
@@ -159,12 +169,6 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"gemini-3.1-flash-image": "gemini-3.1-flash-image",
 	// Gemini 3.1 image preview 映射
 	"gemini-3.1-flash-image-preview": "gemini-3.1-flash-image",
-	// Gemini 3.6 Flash tiered models
-	"gemini-3.6-flash":        "gemini-3.6-flash",
-	"gemini-3.6-flash-high":   "gemini-3.6-flash-high",
-	"gemini-3.6-flash-low":    "gemini-3.6-flash-low",
-	"gemini-3.6-flash-medium": "gemini-3.6-flash-medium",
-	"gemini-3.6-flash-tiered": "gemini-3.6-flash-tiered",
 	// Gemini 3.7 Flash tiered models
 	"gemini-3.7-flash":        "gemini-3.7-flash",
 	"gemini-3.7-flash-high":   "gemini-3.7-flash-high",

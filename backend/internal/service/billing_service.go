@@ -474,17 +474,6 @@ func (s *BillingService) initFallbackPricing() {
 		SupportsCacheBreakdown:     false,
 	}
 
-	// Gemini 3.6 Flash (Google AI pricing: $1.50 input / $7.50 output /
-	// $0.15 cached input per MTok). Antigravity's -high/-low/-medium/-tiered
-	// aliases are matched below so unavailable remote pricing never records
-	// token-bearing requests at $0.
-	s.fallbackPrices["gemini-3.6-flash"] = &ModelPricing{
-		InputPricePerToken:     1.5e-6,
-		OutputPricePerToken:    7.5e-6,
-		CacheReadPricePerToken: 0.15e-6,
-		SupportsCacheBreakdown: false,
-	}
-
 	// Gemini 3.7 Flash (Google AI pricing: $0.75 input / $3.75 output /
 	// $0.075 cached input per MTok, promotional through 2026-12-31; official
 	// rates double to $1.50/$7.50/$0.15 from 2027-01-01). Antigravity's
@@ -505,6 +494,30 @@ func (s *BillingService) initFallbackPricing() {
 	s.fallbackPrices["gemini-3.8-flash"] = &ModelPricing{
 		InputPricePerToken:     0.75e-6,
 		OutputPricePerToken:    3.75e-6,
+		CacheReadPricePerToken: 0.075e-6,
+		SupportsCacheBreakdown: false,
+	}
+
+	// Gemini 4 Argon / Carbon (Google AI pricing: $2 input / $10 output /
+	// $0.10 cached input per MTok, introductory rate through 2026-11-30; it
+	// doubles to $4/$20/$0.20 on 2026-12-01). Tier variants (-low/-medium/
+	// -high/-xhigh) share the base rate and are normalized in
+	// normalizeGeminiThinkingTierAlias so they never fall through to $0.
+	for _, model := range []string{"gemini-4-argon", "gemini-4-carbon"} {
+		s.fallbackPrices[model] = &ModelPricing{
+			InputPricePerToken:     2e-6,
+			OutputPricePerToken:    10e-6,
+			CacheReadPricePerToken: 0.1e-6,
+			SupportsCacheBreakdown: false,
+		}
+	}
+
+	// Gemini 4 Hydrogen (Google AI pricing: $1.50 input / $7.50 output /
+	// $0.075 cached input per MTok, GA rate from 2026-11-12, no scheduled
+	// increase). Tier variants share the base rate; see above.
+	s.fallbackPrices["gemini-4-hydrogen"] = &ModelPricing{
+		InputPricePerToken:     1.5e-6,
+		OutputPricePerToken:    7.5e-6,
 		CacheReadPricePerToken: 0.075e-6,
 		SupportsCacheBreakdown: false,
 	}
@@ -1055,14 +1068,21 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	if strings.Contains(modelLower, "gemini-3.1-pro") || strings.Contains(modelLower, "gemini-3-1-pro") {
 		return s.fallbackPrices["gemini-3.1-pro"]
 	}
-	if strings.Contains(modelLower, "gemini-3.6-flash") || strings.Contains(modelLower, "gemini-3-6-flash") {
-		return s.fallbackPrices["gemini-3.6-flash"]
-	}
 	if strings.Contains(modelLower, "gemini-3.7-flash") || strings.Contains(modelLower, "gemini-3-7-flash") {
 		return s.fallbackPrices["gemini-3.7-flash"]
 	}
 	if strings.Contains(modelLower, "gemini-3.8-flash") || strings.Contains(modelLower, "gemini-3-8-flash") {
 		return s.fallbackPrices["gemini-3.8-flash"]
+	}
+	// Gemini 4 系列：基座与挡位变体（-low/-medium/-high/-xhigh）同价。
+	if strings.Contains(modelLower, "gemini-4-argon") {
+		return s.fallbackPrices["gemini-4-argon"]
+	}
+	if strings.Contains(modelLower, "gemini-4-carbon") {
+		return s.fallbackPrices["gemini-4-carbon"]
+	}
+	if strings.Contains(modelLower, "gemini-4-hydrogen") {
+		return s.fallbackPrices["gemini-4-hydrogen"]
 	}
 
 	// DeepSeek 系列：官方模型 V4 Pro/Flash（含 vision-exp）按各自价卡；

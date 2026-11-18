@@ -18,6 +18,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // ForbiddenError 表示上游返回 403 Forbidden
@@ -37,6 +39,7 @@ func NewAPIRequestWithURL(ctx context.Context, baseURL, action, accessToken stri
 	isStream := action == "streamGenerateContent"
 	if isStream {
 		apiURL += "?alt=sse"
+		body = normalizeAgentSystemInstruction(body)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
@@ -50,6 +53,74 @@ func NewAPIRequestWithURL(ctx context.Context, baseURL, action, accessToken stri
 	req.Header.Set("User-Agent", GetUserAgentForContext(ctx))
 
 	return req, nil
+}
+
+// Cloud Code can return RESOURCE_EXHAUSTED for particular stock agent
+// instructions even when the same account accepts the rest of the request.
+func normalizeAgentSystemInstruction(body []byte) []byte {
+	normalizeHermes := true
+	switch gjson.GetBytes(body, "model").Str {
+	case "gemini-4-hydrogen-low", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-high", "gemini-4-hydrogen-xhigh",
+		"gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high", "gemini-4-argon-xhigh",
+		"gemini-4-carbon-low", "gemini-4-carbon-medium", "gemini-4-carbon-high", "gemini-4-carbon-xhigh",
+		"gemini-3.8-flash", "gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high", "gemini-3.8-flash-tiered":
+	case "claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high",
+		"claude-sonnet-5-5-low", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-high",
+		"claude-opus-4-6-thinking", "claude-sonnet-4-6":
+		normalizeHermes = false
+	default:
+		return body
+	}
+
+	const identity = "You are an AI agent powered by DeepSeek Harness."
+	const partsPath = "request.systemInstruction.parts"
+	for index, part := range gjson.GetBytes(body, partsPath).Array() {
+		original := part.Get("text").Str
+		text := strings.TrimLeft(original, " \t\r\n")
+		firstLine, rest, _ := strings.Cut(text, "\n")
+		if strings.TrimRight(firstLine, " \t\r") == identity {
+			text = strings.TrimLeft(rest, "\r\n")
+			if strings.TrimSpace(text) == "" {
+				text = "You are a coding assistant."
+			}
+		} else if normalizeHermes && strings.HasPrefix(text, hermesAgentIdentity) {
+			text = original[:len(original)-len(text)] + normalizeHermesSystemInstruction(text)
+		} else {
+			text = original
+		}
+
+		if strings.Contains(text, "You are interacting with the user through the DeepSeek Harness Web GUI whose URL the runtime context names.") {
+			text = strings.Replace(text,
+				"The browser provides no implicit DOM, route, or screenshot context.",
+				"Inspect the page explicitly when you need the DOM, current route, or screenshots.",
+				1,
+			)
+		}
+		if text == original {
+			continue
+		}
+		path := fmt.Sprintf("%s.%d.text", partsPath, index)
+		if updated, err := sjson.SetBytes(body, path, text); err == nil {
+			body = updated
+		}
+	}
+	return body
+}
+
+const hermesAgentIdentity = "You are Hermes Agent, built by Nous Research."
+
+func normalizeHermesSystemInstruction(text string) string {
+	text = "You are the Nous Research assistant Hermes Agent." + strings.TrimPrefix(text, hermesAgentIdentity)
+	text = strings.Replace(text,
+		"Be direct: match the length of your reply to the weight of the ask — a one-line question gets a one-line answer, and finished work gets a short report of what changed, what's verified, and what's left, never a replay of the process.",
+		"Be direct: match the length of your reply to the request. Give a one-line answer to a simple question. When work is done, briefly report what changed, what you verified, and what remains. Skip the process recap.",
+		1,
+	)
+	return strings.Replace(text,
+		"Mid-turn, the user can steer you: Hermes delivers their message as a standalone user message right after the latest tool results, wrapped exactly as:",
+		"During a turn, a user update arrives in a separate message with the user role. It follows the most recent tool results and uses this exact wrapper:",
+		1,
+	)
 }
 
 // NewAPIRequest 使用默认 URL 创建 Antigravity API 请求（v1internal 端点）
