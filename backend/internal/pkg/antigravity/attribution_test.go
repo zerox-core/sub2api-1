@@ -103,6 +103,29 @@ func TestNeutralizeClaudeIdentity(t *testing.T) {
 			text: "You are Claude Code, Anthropic's official CLI for Claude. Help with engineering tasks.",
 			want: "You are an AI agent. Help with engineering tasks.",
 		},
+		// Real clients omit or replace the possessive apostrophe. These variants must
+		// also be neutralized, otherwise the upstream keeps answering 429
+		// RESOURCE_EXHAUSTED for an otherwise ordinary request.
+		{
+			name: "cli opener without apostrophe",
+			text: "You are Claude Code, Anthropic official CLI for Claude.",
+			want: "You are an AI agent.",
+		},
+		{
+			name: "cli opener with curly apostrophe",
+			text: "You are Claude Code, Anthropic\u2019s official CLI for Claude. Be concise.",
+			want: "You are an AI agent. Be concise.",
+		},
+		{
+			name: "cli opener without trailing phrase",
+			text: "You are Claude Code, Anthropic official CLI",
+			want: "You are an AI agent.",
+		},
+		{
+			name: "cli opener reversed order",
+			text: "Anthropic official CLI for Claude, you are Claude Code.",
+			want: "You are an AI agent.",
+		},
 		{
 			name: "leading whitespace",
 			text: "\n  You are a Claude agent, built on Anthropic's Claude Agent SDK.\nRest.",

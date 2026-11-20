@@ -324,8 +324,15 @@ func filterOpenCodePrompt(text string) string {
 // The patterns are anchored at the start of a system block on purpose, so user
 // instructions that merely mention Claude or Anthropic are left untouched.
 var claudeIdentityOpeners = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)^[ \t\r\n]*You are a Claude agent, built on Anthropic'?s Claude Agent SDK\.?`),
-	regexp.MustCompile(`(?i)^[ \t\r\n]*You are Claude Code, Anthropic'?s official CLI for Claude\.?`),
+	regexp.MustCompile(`(?i)^[ \t\r\n]*You are a Claude agent, built on Anthropic['’ʼʹ]?s Claude Agent SDK\.?`),
+	// 所有格写法要覆盖 ASCII 撇号、缺省撇号和 Unicode 弯撇号三种形态：
+	// 实际客户端会把撇号去掉或替换，早期只匹配带 ASCII 撇号的写法，
+	// 导致这类请求继续被上游 429 RESOURCE_EXHAUSTED。
+	regexp.MustCompile(`(?i)^[ \t\r\n]*You are Claude Code,\s*Anthropic['’ʼʹ]?s?\s*official CLI for Claude\.?`),
+	// 无逗号、无 "for Claude" 的短写法。
+	regexp.MustCompile(`(?i)^[ \t\r\n]*You are Claude Code,\s*Anthropic['’ʼʹ]?s?\s*official CLI\b\.?`),
+	// 语序颠倒的变体：身份声明在前、Claude Code 在后。
+	regexp.MustCompile(`(?i)^[ \t\r\n]*Anthropic['’ʼʹ]?s?\s*official CLI for Claude,\s*you are Claude Code\.?`),
 }
 
 // neutralizeClaudeIdentity rewrites a leading vendor identity sentence into a
