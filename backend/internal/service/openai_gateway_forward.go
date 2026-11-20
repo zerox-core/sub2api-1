@@ -618,10 +618,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if gjson.GetBytes(body, "max_completion_tokens").Exists() && (account.Type == AccountTypeAPIKey || account.Platform != PlatformOpenAI) {
 			markPatchDelete("max_completion_tokens")
 		}
-		for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier", "prompt_cache_options"} {
+		// prompt_cache_options 是 GPT-5.6+ 的缓存控制字段。旧逻辑对所有上游无条件
+		// 删除，等于把新模型的显式缓存能力关掉。改为按模型能力放行：支持的模型保留，
+		// 其余仍删除，避免不支持的上游因未知字段报 400。
+		// prompt_cache_retention 是 5.6 之前的旧参数，safety_identifier 与本议题无关，
+		// 两者维持原行为。
+		for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier"} {
 			if gjson.GetBytes(body, unsupportedField).Exists() {
 				markPatchDelete(unsupportedField)
 			}
+		}
+		if gjson.GetBytes(body, "prompt_cache_options").Exists() && !SupportsPromptCacheOptions(upstreamModel) {
+			markPatchDelete("prompt_cache_options")
 		}
 	}
 	// Ollama Cloud（实际 Responses 上游为 ollama.com）输出上限 clamp：对 Codex 与

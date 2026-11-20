@@ -1253,6 +1253,38 @@ func normalizeOpenAIModelForUpstream(account *Account, model string) string {
 	return model
 }
 
+// SupportsPromptCacheOptions 报告模型是否接受 Responses API 的
+// prompt_cache_options（显式缓存模式 / 断点 / TTL）。
+//
+// 依据 OpenAI prompt caching 文档：显式断点与 prompt_cache_options 自 GPT-5.6
+// 起才支持，更早的模型只认隐式断点与 prompt_cache_retention。把该字段发给不支持的
+// 模型会被上游以 400 拒绝，因此转发前必须按模型版本判断，而不是一刀切删除。
+//
+// 注意 gpt-6 / gpt-6-sol 这类不带次版本号的写法按 ">= 5.6" 处理。
+func SupportsPromptCacheOptions(model string) bool {
+	model = strings.TrimSpace(strings.ToLower(model))
+	if !strings.HasPrefix(model, "gpt-") {
+		// 非 OpenAI 自有命名（自定义别名、透传名）保守放行：由上游决定是否接受，
+		// 真正的拒绝会走既有的 rejected-field 重试路径。
+		return false
+	}
+
+	var major, minor int
+	n, _ := fmt.Sscanf(model, "gpt-%d.%d", &major, &minor)
+
+	if major >= 6 {
+		return true
+	}
+	if major < 5 {
+		return false
+	}
+	// gpt-5 / gpt-5-sol 这类没有次版本号的写法属于 5.0 基线。
+	if n < 2 {
+		return false
+	}
+	return minor >= 6
+}
+
 func SupportsVerbosity(model string) bool {
 	if !strings.HasPrefix(model, "gpt-") {
 		return true

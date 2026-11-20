@@ -929,7 +929,15 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 		return hash
 	}
 
-	// 3. 最后 fallback: 使用 session上下文 + system + 所有消息的完整摘要串
+	// 3. 最后 fallback: 使用 session上下文 + system + 会话锚点
+	//
+	// 这里必须用「整段会话中稳定不变的部分」做锚点，而不是把所有消息都算进去。
+	// 旧实现把每轮新增的消息也拼进 hash，导致同一个对话每发一句话 hash 就变，
+	// 粘性必然失效、请求在多个账号间轮转；而上游的 prompt cache 是按账号隔离的，
+	// 换账号等于缓存全部清零，长上下文对话因此反复按全价重算。
+	//
+	// 现在改为取首条用户消息（会话起点）+ system 前缀：只要还是同一个对话，
+	// 无论聊到第几轮，hash 都保持不变，粘性才能真正成立。
 	var combined strings.Builder
 	// 混入请求上下文区分因子，避免不同用户相同消息产生相同 hash
 	if parsed.SessionContext != nil {
@@ -944,9 +952,13 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 		_, _ = combined.WriteString(systemText)
 	}
 	contentStart := combined.Len()
-	appendMessageTextsFromRaw(&combined, parsed.MessagesRaw())
-	if combined.Len() == contentStart {
+	// 只取会话的首条用户消息作为锚点，后续轮次追加的内容不参与 hash。
+	if !appendFirstMessageTextsFromRaw(&combined, parsed.MessagesRaw()) {
 		appendResponsesSessionAnchorFromRaw(&combined, parsed.InputRaw())
+	}
+	if combined.Len() == contentStart {
+		// 拿不到任何稳定锚点时，退回「整段消息」的旧行为，避免完全失去粘性。
+		appendMessageTextsFromRaw(&combined, parsed.MessagesRaw())
 	}
 	if combined.Len() > 0 {
 		hash := s.hashContent(combined.String())
@@ -1114,6 +1126,49 @@ func extractTextFromContentRaw(content gjson.Result) string {
 		return builder.String()
 	}
 	return ""
+}
+
+// appendFirstMessageTextsFromRaw 只把「首条用户消息」的文本写入 builder，并报告是否命中。
+//
+// 用途：生成粘性会话锚点。会话首条消息在整段对话里稳定不变，用它做 hash 输入，
+// 多轮追加内容不会改变 hash，粘性因此能维持，上游 prompt cache 也才能持续复用。
+// 旧实现把所有消息都算进去，每轮 hash 都变，等于没有粘性。
+func appendFirstMessageTextsFromRaw(builder *strings.Builder, raw []byte) bool {
+	if builder == nil || len(raw) == 0 {
+		return false
+	}
+	messages := parseRawJSONView(raw)
+	if !messages.IsArray() {
+		return false
+	}
+	written := false
+	messages.ForEach(func(_, msg gjson.Result) bool {
+		// 优先取 user 角色的首条；assistant/tool 的回复轮次会变化，不能做锚点。
+		role := strings.TrimSpace(msg.Get("role").String())
+		if role != "" && !strings.EqualFold(role, "user") {
+			return true
+		}
+		if content := msg.Get("content"); content.Exists() {
+			if text := extractTextFromContentRaw(content); text != "" {
+				_, _ = builder.WriteString(text)
+				written = true
+				return false
+			}
+		}
+		parts := msg.Get("parts")
+		if parts.IsArray() {
+			parts.ForEach(func(_, part gjson.Result) bool {
+				if text := part.Get("text").String(); text != "" {
+					_, _ = builder.WriteString(text)
+					written = true
+					return false
+				}
+				return true
+			})
+		}
+		return !written
+	})
+	return written
 }
 
 func appendMessageTextsFromRaw(builder *strings.Builder, raw []byte) {
