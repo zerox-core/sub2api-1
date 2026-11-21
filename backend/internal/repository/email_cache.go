@@ -21,6 +21,11 @@ const (
 	// attemptsKeySuffix stores the failed-attempt counter next to a verification code.
 	// Kept in a separate key so it can be incremented atomically with INCR.
 	attemptsKeySuffix = ":attempts"
+
+	// cooldownKeySuffix marks an in-flight send reservation for a verification code.
+	// It is claimed with SET NX so concurrent send requests cannot all pass the
+	// cooldown check and each mail out a different code.
+	cooldownKeySuffix = ":cooldown"
 )
 
 // incrAttemptsScript atomically increments the attempt counter for an existing
@@ -129,6 +134,19 @@ func (c *emailCache) deleteCode(ctx context.Context, key string) error {
 	return c.rdb.Del(ctx, key, key+attemptsKeySuffix).Err()
 }
 
+// reserveCodeCooldown atomically claims the send slot for a verification code.
+// It returns true only for the caller that won the SET NX, so at most one code
+// generation/mail delivery proceeds per cooldown window. Callers must release
+// the reservation (ReleaseVerificationCodeCooldown) when sending fails, so a
+// delivery error does not lock the user out for the whole window.
+func (c *emailCache) reserveCodeCooldown(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	return c.rdb.SetNX(ctx, key+cooldownKeySuffix, "1", ttl).Result()
+}
+
+func (c *emailCache) releaseCodeCooldown(ctx context.Context, key string) error {
+	return c.rdb.Del(ctx, key+cooldownKeySuffix).Err()
+}
+
 func (c *emailCache) GetVerificationCode(ctx context.Context, email string) (*service.VerificationCodeData, error) {
 	return c.getCode(ctx, verifyCodeKey(email))
 }
@@ -143,6 +161,17 @@ func (c *emailCache) IncrVerificationCodeAttempts(ctx context.Context, email str
 
 func (c *emailCache) DeleteVerificationCode(ctx context.Context, email string) error {
 	return c.deleteCode(ctx, verifyCodeKey(email))
+}
+
+// ReserveVerificationCodeCooldown atomically claims the send slot for the email.
+// Returns true only for the single winner; concurrent callers get false.
+func (c *emailCache) ReserveVerificationCodeCooldown(ctx context.Context, email string, ttl time.Duration) (bool, error) {
+	return c.reserveCodeCooldown(ctx, verifyCodeKey(email), ttl)
+}
+
+// ReleaseVerificationCodeCooldown drops a reservation after a failed delivery.
+func (c *emailCache) ReleaseVerificationCodeCooldown(ctx context.Context, email string) error {
+	return c.releaseCodeCooldown(ctx, verifyCodeKey(email))
 }
 
 // Password reset token methods

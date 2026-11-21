@@ -1291,3 +1291,33 @@ func TestNormalizeAntigravityModelName(t *testing.T) {
 		})
 	}
 }
+
+func TestAntigravityGeneric429RequiresLimitEvidence(t *testing.T) {
+	body := []byte(`{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Resource has been exhausted (e.g. check quota)."}}`)
+	for _, tc := range []struct {
+		name, retryAfter  string
+		wantModelCooldown bool
+	}{
+		{"no retry metadata", "", false},
+		{"expired Retry-After", "0", false},
+		{"invalid Retry-After", "invalid", false},
+		{"upstream Retry-After", "20", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &stubAntigravityAccountRepo{}
+			svc := &AntigravityGatewayService{accountRepo: repo}
+			account := &Account{ID: 789, Platform: PlatformAntigravity, Type: AccountTypeOAuth}
+			header := http.Header{}
+			header.Set("Retry-After", tc.retryAfter)
+			svc.handleUpstreamError(context.Background(), "[test]", account, 429, header, body, "gemini-4-hydrogen-medium", 12, "", false)
+			require.Empty(t, repo.rateCalls)
+			if tc.wantModelCooldown {
+				require.Len(t, repo.modelRateLimitCalls, 1)
+				require.Equal(t, "gemini-4-hydrogen-medium", repo.modelRateLimitCalls[0].modelKey)
+				require.WithinDuration(t, time.Now().Add(20*time.Second), repo.modelRateLimitCalls[0].resetAt, 2*time.Second)
+			} else {
+				require.Empty(t, repo.modelRateLimitCalls)
+			}
+		})
+	}
+}

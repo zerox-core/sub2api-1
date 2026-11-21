@@ -929,7 +929,7 @@ func TestResolveAccountStatsCost_Gemini36FlashTierUsesFallbackPricing(t *testing
 	result := resolveAccountStatsCost(
 		context.Background(),
 		cs, bs,
-		1, 10, "gemini-3.6-flash-low",
+		1, 10, "gemini-4-hydrogen-low",
 		UsageTokens{InputTokens: 1_000_000, OutputTokens: 1_000_000, CacheReadTokens: 1_000_000}, 1, 0, "", time.Time{}, true,
 	)
 	require.NotNil(t, result)

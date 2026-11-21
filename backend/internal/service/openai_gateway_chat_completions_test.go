@@ -1318,19 +1318,17 @@ func TestGPT61SolMessagesEffortAliasesPreserveIntent(t *testing.T) {
 	}
 }
 
-func TestGPT61SolOnlyChatFallbackRejectsToolsAndDisabledReasoning(t *testing.T) {
+func TestGPT61SolOnlyChatFallbackRejectsTools(t *testing.T) {
 	for _, responses := range []bool{false, true} {
 		bodies := []string{
 			`{"model":"public","max_tokens":100,"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`,
-			`{"model":"public","max_tokens":100,"messages":[{"role":"user","content":"hi"}],"thinking":{"type":"disabled"}}`,
 		}
 		if responses {
 			bodies = []string{
 				`{"model":"public","input":"hi","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}`,
-				`{"model":"public","input":"hi","reasoning":{"effort":"none"}}`,
 			}
 		}
-		for i, body := range bodies {
+		for _, body := range bodies {
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
@@ -1343,16 +1341,11 @@ func TestGPT61SolOnlyChatFallbackRejectsToolsAndDisabledReasoning(t *testing.T) 
 				_, err = svc.forwardAnthropicViaRawChatCompletions(context.Background(), c, account, []byte(body), "")
 			}
 			require.Error(t, err)
-			if i == 0 {
-				var failoverErr *UpstreamFailoverError
-				require.ErrorAs(t, err, &failoverErr)
-				require.True(t, failoverErr.ShouldRetryNextAccount())
-				require.Contains(t, failoverErr.ClientMessage, "gpt-6.1-sol")
-				require.Equal(t, http.StatusOK, rec.Code)
-				continue
-			}
-			require.Equal(t, http.StatusBadRequest, rec.Code)
-			require.Contains(t, rec.Body.String(), "gpt-6.1-sol")
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, err, &failoverErr)
+			require.True(t, failoverErr.ShouldRetryNextAccount())
+			require.Contains(t, failoverErr.ClientMessage, "gpt-6.1-sol")
+			require.Equal(t, http.StatusOK, rec.Code)
 		}
 	}
 }

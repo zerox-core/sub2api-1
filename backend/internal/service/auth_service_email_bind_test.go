@@ -1181,3 +1181,11 @@ func (s *emailBindCacheStub) IncrNotifyVerifyCodeAttempts(context.Context, strin
 func (s *emailBindCacheStub) ConsumePasswordResetToken(context.Context, string, string) (bool, error) {
 	return false, nil
 }
+
+func (s *emailBindCacheStub) ReserveVerificationCodeCooldown(context.Context, string, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (s *emailBindCacheStub) ReleaseVerificationCodeCooldown(context.Context, string) error {
+	return nil
+}

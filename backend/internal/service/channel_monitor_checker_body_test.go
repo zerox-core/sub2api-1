@@ -501,7 +501,7 @@ func TestValidateChallenge_AnthropicTextAfterThinking(t *testing.T) {
 
 func TestGeminiMonitorBodyIncludesExplicitUserRole(t *testing.T) {
 	adapter := providerAdapters[MonitorProviderGemini]
-	body, err := adapter.buildBody("gemini-3.6-flash", "Reply with only 7.")
+	body, err := adapter.buildBody("gemini-3.8-flash", "Reply with only 7.")
 	if err != nil {
 		t.Fatalf("buildBody() error = %v", err)
 	}

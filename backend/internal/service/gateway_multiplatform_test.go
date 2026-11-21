@@ -2225,6 +2225,64 @@ func (m *mockConcurrencyCache) GetUsersLoadBatch(ctx context.Context, users []Us
 	return result, nil
 }
 
+func TestAntigravityClaudeRoutesRestrictAccountSelection(t *testing.T) {
+	groupID := int64(23)
+	const opus55 = "claude-opus-5-5-medium"
+	const opus46 = "claude-opus-4-6-thinking"
+	for _, loadBatch := range []bool{false, true} {
+		path := "legacy"
+		if loadBatch {
+			path = "load-aware"
+		}
+		t.Run(path, func(t *testing.T) {
+			repo := &mockAccountRepoForPlatform{accountsByID: make(map[int64]*Account)}
+			for i, id := range []int64{61, 34, 52} {
+				repo.accounts = append(repo.accounts, Account{
+					ID: id, Platform: PlatformAntigravity, Type: AccountTypeOAuth,
+					Priority: i + 1, Status: StatusActive, Schedulable: true, Concurrency: 5,
+					GroupIDs: []int64{groupID},
+				})
+			}
+			for i := range repo.accounts {
+				repo.accountsByID[repo.accounts[i].ID] = &repo.accounts[i]
+			}
+			group := &Group{
+				ID: groupID, Platform: PlatformAntigravity, Status: StatusActive, Hydrated: true,
+				ModelRoutingEnabled: true,
+				ModelRouting:        map[string][]int64{opus55: {52}, opus46: {34, 61}},
+			}
+			cfg := testConfig()
+			cfg.Gateway.Scheduling.LoadBatchEnabled = loadBatch
+			svc := &GatewayService{
+				accountRepo:        repo,
+				groupRepo:          &mockGroupRepoForGateway{groups: map[int64]*Group{groupID: group}},
+				cache:              &mockGatewayCacheForPlatform{},
+				concurrencyService: NewConcurrencyService(&mockConcurrencyCache{}),
+				cfg:                cfg,
+			}
+			for _, forcePlatform := range []bool{false, true} {
+				ctx := context.Background()
+				if forcePlatform {
+					ctx = context.WithValue(ctx, ctxkey.ForcePlatform, PlatformAntigravity)
+				}
+				chosen, err := svc.SelectAccountWithLoadAwareness(ctx, &groupID, "", opus55, nil, "", 0)
+				require.NoError(t, err)
+				require.Equal(t, int64(52), chosen.Account.ID)
+
+				chosen, err = svc.SelectAccountWithLoadAwareness(ctx, &groupID, "", opus46, map[int64]struct{}{61: {}}, "", 0)
+				require.NoError(t, err)
+				require.Equal(t, int64(34), chosen.Account.ID)
+
+				_, err = svc.SelectAccountWithLoadAwareness(ctx, &groupID, "", opus55, map[int64]struct{}{52: {}}, "", 0)
+				require.ErrorIs(t, err, ErrNoAvailableAccounts)
+
+				_, err = svc.SelectAccountWithLoadAwareness(ctx, &groupID, "", opus46, map[int64]struct{}{34: {}, 61: {}}, "", 0)
+				require.ErrorIs(t, err, ErrNoAvailableAccounts)
+			}
+		})
+	}
+}
+
 // TestGatewayService_SelectAccountWithLoadAwareness tests load-aware account selection
 func TestGatewayService_SelectAccountWithLoadAwareness(t *testing.T) {
 	ctx := context.Background()

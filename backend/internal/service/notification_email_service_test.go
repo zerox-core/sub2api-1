@@ -308,13 +308,19 @@ func TestNotificationEmailFallbackClassification(t *testing.T) {
 }
 
 func TestEmailQueueTasksPreserveLocaleHints(t *testing.T) {
-	queue := &EmailQueueService{taskChan: make(chan EmailTask, 2)}
+	// EnqueueVerifyCode now reserves the cooldown slot and persists the code
+	// synchronously, so the queue needs a real email service backed by a cache.
+	cache := &emailCacheStub{}
+	emailSvc := NewEmailService(nil, cache)
+	queue := &EmailQueueService{emailService: emailSvc, taskChan: make(chan EmailTask, 2)}
+
 	require.NoError(t, queue.EnqueueVerifyCode("user@example.com", "Sub2API", "zh-CN"))
 	require.NoError(t, queue.EnqueuePasswordReset("user@example.com", "Sub2API", "https://example.com/reset", "en-US"))
 
 	verifyTask := <-queue.taskChan
 	require.Equal(t, TaskTypeVerifyCode, verifyTask.TaskType)
 	require.Equal(t, "zh-CN", verifyTask.Locale)
+	require.NotEmpty(t, verifyTask.VerifyCode, "queued task must carry the code already stored in cache")
 
 	resetTask := <-queue.taskChan
 	require.Equal(t, TaskTypePasswordReset, resetTask.TaskType)

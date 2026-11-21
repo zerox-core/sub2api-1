@@ -556,6 +556,7 @@ func (s *TotpService) SendVerifyCode(ctx context.Context, userID int64, locale .
 	// Get site name for email
 	siteName := s.settingService.GetSiteName(ctx)
 
-	// Send verification code via queue
-	return s.emailQueueService.EnqueueVerifyCode(user.Email, siteName, firstEmailLocale(locale))
+	// Send verification code and wait for the real delivery outcome, so an API
+	// success always means the mail was actually accepted by the SMTP server.
+	return s.emailQueueService.SendVerifyCodeAndWait(ctx, user.Email, siteName, firstEmailLocale(locale))
 }

@@ -1026,3 +1026,11 @@ func (s *emailCacheStub) IncrNotifyVerifyCodeAttempts(context.Context, string) (
 func (s *emailCacheStub) ConsumePasswordResetToken(context.Context, string, string) (bool, error) {
 	return false, nil
 }
+
+func (s *emailCacheStub) ReserveVerificationCodeCooldown(context.Context, string, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (s *emailCacheStub) ReleaseVerificationCodeCooldown(context.Context, string) error {
+	return nil
+}

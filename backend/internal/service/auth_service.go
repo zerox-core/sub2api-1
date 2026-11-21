@@ -380,14 +380,16 @@ func (s *AuthService) SendVerifyCodeAsync(ctx context.Context, email string, loc
 		siteName = s.settingService.GetSiteName(ctx)
 	}
 
-	// 异步发送
-	logger.LegacyPrintf("service.auth", "[Auth] Enqueueing verify code for: %s", email)
-	if err := s.emailQueueService.EnqueueVerifyCode(email, siteName, firstEmailLocale(locale)); err != nil {
-		logger.LegacyPrintf("service.auth", "[Auth] Failed to enqueue: %v", err)
-		return nil, fmt.Errorf("enqueue verify code: %w", err)
+	// 发送并等待真实投递结果：只有 SMTP 服务器接收了这封邮件才返回成功。
+	// 之前仅"入队成功"就返回 200，投递失败只写日志，用户看到"验证码已发送"
+	// 却永远收不到邮件，最终只能报"验证码无效"。
+	logger.LegacyPrintf("service.auth", "[Auth] Sending verify code for: %s", email)
+	if err := s.emailQueueService.SendVerifyCodeAndWait(ctx, email, siteName, firstEmailLocale(locale)); err != nil {
+		logger.LegacyPrintf("service.auth", "[Auth] Failed to send verify code: %v", err)
+		return nil, err
 	}
 
-	logger.LegacyPrintf("service.auth", "[Auth] Verify code enqueued successfully for: %s", email)
+	logger.LegacyPrintf("service.auth", "[Auth] Verify code delivered to: %s", email)
 	return &SendVerifyCodeResult{
 		Countdown: 60, // 60秒倒计时
 	}, nil

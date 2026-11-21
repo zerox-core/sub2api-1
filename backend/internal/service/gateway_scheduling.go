@@ -224,6 +224,19 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	if err != nil {
 		return nil, err
 	}
+	routedIDs, err := s.antigravityClaudeRoutingAccountIDs(ctx, groupID, platform, requestedModel)
+	if err != nil {
+		return nil, err
+	}
+	if len(routedIDs) > 0 {
+		routed := make([]Account, 0, len(routedIDs))
+		for _, account := range accounts {
+			if containsInt64(routedIDs, account.ID) {
+				routed = append(routed, account)
+			}
+		}
+		accounts = routed
+	}
 	if len(accounts) == 0 {
 		return nil, ErrNoAvailableAccounts
 	}
@@ -890,6 +903,23 @@ func modelRoutingAppliesToTargetPlatform(targetPlatform string) bool {
 	default:
 		return false
 	}
+}
+
+// Explicit Claude routes in Antigravity groups restrict account eligibility.
+// Different account entitlements can make falling back to the rest of the group fail.
+func (s *GatewayService) antigravityClaudeRoutingAccountIDs(ctx context.Context, groupID *int64, platform, model string) ([]int64, error) {
+	model = strings.TrimPrefix(model, "models/")
+	if groupID == nil || platform != PlatformAntigravity || !strings.HasPrefix(model, "claude-") {
+		return nil, nil
+	}
+	group, err := s.resolveGroupByID(ctx, *groupID)
+	if err != nil {
+		return nil, err
+	}
+	if group == nil || group.Platform != PlatformAntigravity {
+		return nil, nil
+	}
+	return group.GetRoutingAccountIDs(model), nil
 }
 
 func (s *GatewayService) routingAccountIDsForRequest(ctx context.Context, groupID *int64, requestedModel string, platform string) []int64 {
@@ -1897,6 +1927,13 @@ func shuffleWithinPriority(accounts []*Account) {
 func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, platform string) (*Account, error) {
 	preferOAuth := platform == PlatformGemini
 	routingAccountIDs := s.routingAccountIDsForRequest(ctx, groupID, requestedModel, platform)
+	strictRoutingIDs, err := s.antigravityClaudeRoutingAccountIDs(ctx, groupID, platform, requestedModel)
+	if err != nil {
+		return nil, err
+	}
+	if len(strictRoutingIDs) > 0 {
+		routingAccountIDs = strictRoutingIDs
+	}
 
 	// require_privacy_set: 获取分组配置。GetByID 会聚合账号计数，旧选号路径不能用它。
 	var schedGroup *Group
@@ -2033,6 +2070,9 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 				logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy routed select: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), selected.ID)
 			}
 			return selected, nil
+		}
+		if len(strictRoutingIDs) > 0 {
+			return nil, ErrNoAvailableAccounts
 		}
 		logger.LegacyPrintf("service.gateway", "[ModelRouting] No routed accounts available for model=%s, falling back to normal selection", requestedModel)
 	}

@@ -17,12 +17,23 @@ const (
 
 // EmailTask 邮件发送任务
 type EmailTask struct {
-	Email    string
-	SiteName string
-	TaskType string // "verify_code" or "password_reset"
-	ResetURL string // Only used for password_reset task type
-	Locale   string // Optional Accept-Language locale hint
+	Email      string
+	SiteName   string
+	TaskType   string // "verify_code" or "password_reset"
+	ResetURL   string // Only used for password_reset task type
+	Locale     string // Optional Accept-Language locale hint
+	VerifyCode string // Only used for verify_code: the code already stored in cache
+
+	// result carries the delivery outcome back to a caller that is waiting for
+	// it. nil means fire-and-forget. The channel is buffered so a worker never
+	// blocks if the caller has already given up.
+	result chan error
 }
+
+// verifyCodeDeliveryTimeout bounds how long a caller waits for the worker to
+// report the real SMTP outcome. It stays under the frontend's 30s HTTP timeout
+// so the caller sees our error instead of a client-side abort.
+const verifyCodeDeliveryTimeout = 25 * time.Second
 
 // EmailQueueService 异步邮件队列服务
 type EmailQueueService struct {
@@ -83,10 +94,16 @@ func (s *EmailQueueService) processTask(workerID int, task EmailTask) {
 
 	switch task.TaskType {
 	case TaskTypeVerifyCode:
-		if err := s.emailService.SendVerifyCode(ctx, task.Email, task.SiteName, task.Locale); err != nil {
+		err := s.emailService.DeliverVerifyCode(ctx, task.Email, task.SiteName, task.Locale, task.VerifyCode)
+		if err != nil {
 			logger.LegacyPrintf("service.email_queue", "[EmailQueue] Worker %d failed to send verify code to %s: %v", workerID, task.Email, err)
 		} else {
 			logger.LegacyPrintf("service.email_queue", "[EmailQueue] Worker %d sent verify code to %s", workerID, task.Email)
+		}
+		// Report the true outcome to the waiting caller, if any. The channel is
+		// buffered, so this never blocks even if the caller already timed out.
+		if task.result != nil {
+			task.result <- err
 		}
 	case TaskTypePasswordReset:
 		if err := s.emailService.SendPasswordResetEmailWithCooldown(ctx, task.Email, task.SiteName, task.ResetURL, task.Locale); err != nil {
@@ -99,21 +116,80 @@ func (s *EmailQueueService) processTask(workerID int, task EmailTask) {
 	}
 }
 
-// EnqueueVerifyCode 将验证码发送任务加入队列
+// EnqueueVerifyCode reserves the cooldown slot and persists the code
+// synchronously, then queues only the delivery step (fire-and-forget).
+//
+// The reservation must happen here (not inside the worker): if it ran in the
+// worker, the HTTP request would already have returned "code sent" while a
+// concurrent request stole the slot, and every caller would see 200 with no
+// mail actually delivered. Doing it up front lets the loser get a truthful 429.
+//
+// Callers that must not report success before the mail is actually accepted by
+// the SMTP server should use SendVerifyCodeAndWait instead.
 func (s *EmailQueueService) EnqueueVerifyCode(email, siteName string, locale ...string) error {
+	_, err := s.enqueueVerifyCode(email, siteName, false, locale...)
+	return err
+}
+
+// SendVerifyCodeAndWait queues the delivery and blocks until the worker reports
+// the real SMTP outcome. This is what keeps the API from answering
+// "verification code sent" for a mail that was never delivered.
+func (s *EmailQueueService) SendVerifyCodeAndWait(ctx context.Context, email, siteName string, locale ...string) error {
+	result, err := s.enqueueVerifyCode(email, siteName, true, locale...)
+	if err != nil {
+		return err
+	}
+	select {
+	case deliveryErr := <-result:
+		return deliveryErr
+	case <-ctx.Done():
+		// The caller went away; the buffered channel still lets the worker
+		// finish and release the cooldown without blocking.
+		return ctx.Err()
+	case <-time.After(verifyCodeDeliveryTimeout):
+		s.emailService.releaseCooldown(context.Background(), email)
+		return fmt.Errorf("verify code delivery timed out after %s", verifyCodeDeliveryTimeout)
+	}
+}
+
+func (s *EmailQueueService) enqueueVerifyCode(email, siteName string, waitForResult bool, locale ...string) (chan error, error) {
+	if s == nil || s.emailService == nil {
+		return nil, ErrEmailNotConfigured
+	}
+	// The queued task carries the exact code that was reserved, so a delivery
+	// retry can never mail a code that differs from what Redis currently holds.
+	code, err := s.emailService.prepareVerifyCode(context.Background(), email)
+	if err != nil {
+		return nil, err
+	}
+
+	var result chan error
+	if waitForResult {
+		// Buffered: the worker can always finish without blocking, even if the
+		// caller already returned (timeout or cancellation).
+		result = make(chan error, 1)
+	}
+
 	task := EmailTask{
-		Email:    email,
-		SiteName: siteName,
-		TaskType: TaskTypeVerifyCode,
-		Locale:   firstEmailLocale(locale),
+		Email:      email,
+		SiteName:   siteName,
+		TaskType:   TaskTypeVerifyCode,
+		Locale:     firstEmailLocale(locale),
+		VerifyCode: code,
+		result:     result,
 	}
 
 	select {
 	case s.taskChan <- task:
 		logger.LegacyPrintf("service.email_queue", "[EmailQueue] Enqueued verify code task for %s", email)
-		return nil
+		return result, nil
 	default:
-		return fmt.Errorf("email queue is full")
+		// Nothing will deliver this code: release the slot so the user can retry
+		// immediately instead of waiting out a cooldown for a mail never sent.
+		if releaseErr := s.emailService.cache.ReleaseVerificationCodeCooldown(context.Background(), email); releaseErr != nil {
+			logger.LegacyPrintf("service.email_queue", "[EmailQueue] Failed to release cooldown for %s: %v", email, releaseErr)
+		}
+		return nil, fmt.Errorf("email queue is full")
 	}
 }
 

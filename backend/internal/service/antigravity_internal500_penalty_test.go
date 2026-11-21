@@ -111,92 +111,6 @@ func TestIsAntigravityInternalServerError(t *testing.T) {
 }
 
 // =============================================================================
-// TestApplyInternal500Penalty
-// =============================================================================
-
-func TestApplyInternal500Penalty(t *testing.T) {
-	t.Run("count=1 → SetTempUnschedulable 10 分钟", func(t *testing.T) {
-		repo := &internal500AccountRepoStub{}
-		svc := &AntigravityGatewayService{accountRepo: repo}
-		account := &Account{ID: 1, Name: "acc-1"}
-
-		before := time.Now()
-		svc.applyInternal500Penalty(context.Background(), "[test]", account, 1)
-		after := time.Now()
-
-		require.Len(t, repo.tempUnschedCalls, 1)
-		require.Empty(t, repo.setErrorCalls)
-
-		call := repo.tempUnschedCalls[0]
-		require.Equal(t, int64(1), call.accountID)
-		require.Contains(t, call.reason, "INTERNAL 500")
-		// until 应在 [before+10m, after+10m] 范围内
-		require.True(t, call.until.After(before.Add(internal500PenaltyTier1Duration).Add(-time.Second)))
-		require.True(t, call.until.Before(after.Add(internal500PenaltyTier1Duration).Add(time.Second)))
-	})
-
-	t.Run("count=2 → SetTempUnschedulable 10 小时", func(t *testing.T) {
-		repo := &internal500AccountRepoStub{}
-		svc := &AntigravityGatewayService{accountRepo: repo}
-		account := &Account{ID: 2, Name: "acc-2"}
-
-		before := time.Now()
-		svc.applyInternal500Penalty(context.Background(), "[test]", account, 2)
-		after := time.Now()
-
-		require.Len(t, repo.tempUnschedCalls, 1)
-		require.Empty(t, repo.setErrorCalls)
-
-		call := repo.tempUnschedCalls[0]
-		require.Equal(t, int64(2), call.accountID)
-		require.Contains(t, call.reason, "INTERNAL 500")
-		require.True(t, call.until.After(before.Add(internal500PenaltyTier2Duration).Add(-time.Second)))
-		require.True(t, call.until.Before(after.Add(internal500PenaltyTier2Duration).Add(time.Second)))
-	})
-
-	t.Run("count=3 → SetError 永久禁用", func(t *testing.T) {
-		repo := &internal500AccountRepoStub{}
-		svc := &AntigravityGatewayService{accountRepo: repo}
-		account := &Account{ID: 3, Name: "acc-3"}
-
-		svc.applyInternal500Penalty(context.Background(), "[test]", account, 3)
-
-		require.Empty(t, repo.tempUnschedCalls)
-		require.Len(t, repo.setErrorCalls, 1)
-
-		call := repo.setErrorCalls[0]
-		require.Equal(t, int64(3), call.accountID)
-		require.Contains(t, call.reason, "INTERNAL 500 consecutive failures: 3")
-	})
-
-	t.Run("count=5 → SetError 永久禁用（>=3 都走永久禁用）", func(t *testing.T) {
-		repo := &internal500AccountRepoStub{}
-		svc := &AntigravityGatewayService{accountRepo: repo}
-		account := &Account{ID: 5, Name: "acc-5"}
-
-		svc.applyInternal500Penalty(context.Background(), "[test]", account, 5)
-
-		require.Empty(t, repo.tempUnschedCalls)
-		require.Len(t, repo.setErrorCalls, 1)
-
-		call := repo.setErrorCalls[0]
-		require.Equal(t, int64(5), call.accountID)
-		require.Contains(t, call.reason, "INTERNAL 500 consecutive failures: 5")
-	})
-
-	t.Run("count=0 → 不调用任何方法", func(t *testing.T) {
-		repo := &internal500AccountRepoStub{}
-		svc := &AntigravityGatewayService{accountRepo: repo}
-		account := &Account{ID: 10, Name: "acc-10"}
-
-		svc.applyInternal500Penalty(context.Background(), "[test]", account, 0)
-
-		require.Empty(t, repo.tempUnschedCalls)
-		require.Empty(t, repo.setErrorCalls)
-	})
-}
-
-// =============================================================================
 // TestHandleInternal500RetryExhausted
 // =============================================================================
 
@@ -236,45 +150,18 @@ func TestHandleInternal500RetryExhausted(t *testing.T) {
 		require.Empty(t, repo.setErrorCalls)
 	})
 
-	t.Run("IncrementInternal500Count 返回 count=1 → 触发 tier1 惩罚", func(t *testing.T) {
+	for _, count := range []int64{1, 2, 3, 5} {
 		repo := &internal500AccountRepoStub{}
-		cache := &mockInternal500Cache{
-			incrementCount: 1,
-		}
-		svc := &AntigravityGatewayService{
-			accountRepo:      repo,
-			internal500Cache: cache,
-		}
+		cache := &mockInternal500Cache{incrementCount: count}
+		svc := &AntigravityGatewayService{accountRepo: repo, internal500Cache: cache}
 		account := &Account{ID: 3, Name: "acc-3"}
 
 		svc.handleInternal500RetryExhausted(context.Background(), "[test]", account)
 
-		require.Len(t, cache.incrementCalls, 1)
-		require.Equal(t, int64(3), cache.incrementCalls[0])
-		// tier1: SetTempUnschedulable
-		require.Len(t, repo.tempUnschedCalls, 1)
-		require.Equal(t, int64(3), repo.tempUnschedCalls[0].accountID)
-		require.Empty(t, repo.setErrorCalls)
-	})
-
-	t.Run("IncrementInternal500Count 返回 count=3 → 触发 tier3 永久禁用", func(t *testing.T) {
-		repo := &internal500AccountRepoStub{}
-		cache := &mockInternal500Cache{
-			incrementCount: 3,
-		}
-		svc := &AntigravityGatewayService{
-			accountRepo:      repo,
-			internal500Cache: cache,
-		}
-		account := &Account{ID: 4, Name: "acc-4"}
-
-		svc.handleInternal500RetryExhausted(context.Background(), "[test]", account)
-
-		require.Len(t, cache.incrementCalls, 1)
-		require.Empty(t, repo.tempUnschedCalls)
-		require.Len(t, repo.setErrorCalls, 1)
-		require.Equal(t, int64(4), repo.setErrorCalls[0].accountID)
-	})
+		require.Equal(t, []int64{3}, cache.incrementCalls)
+		require.Empty(t, repo.tempUnschedCalls, "count=%d", count)
+		require.Empty(t, repo.setErrorCalls, "count=%d", count)
+	}
 }
 
 // =============================================================================

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tidwall/gjson"
 )
 
 const defaultFetchAvailableModelsBodyLimit int64 = 8 << 20
@@ -71,6 +74,121 @@ func TestNewAPIRequestWithURL_流式请求(t *testing.T) {
 	expectedURL := "https://example.com/v1internal:streamGenerateContent?alt=sse"
 	if req.URL.String() != expectedURL {
 		t.Errorf("URL 不匹配: got %s, want %s", req.URL.String(), expectedURL)
+	}
+}
+
+func TestNewAPIRequestWithURL_GeminiAgentSystemInstruction(t *testing.T) {
+	const body = `{"model":"%s","request":{"systemInstruction":{"parts":[{"text":"Antigravity identity"},{"text":"You are an AI agent powered by DeepSeek Harness.\r\n\r\nKeep using the tools."},{"text":"Quote:\nYou are an AI agent powered by DeepSeek Harness."}]},"contents":[{"parts":[{"text":"You are an AI agent powered by DeepSeek Harness."}]}]}}`
+	for _, tc := range []struct {
+		model     string
+		action    string
+		normalize bool
+	}{
+		{"gemini-4-hydrogen-medium", "streamGenerateContent", true},
+		{"gemini-4-hydrogen-xhigh", "streamGenerateContent", true},
+		{"gemini-3.8-flash", "streamGenerateContent", true},
+		{"gemini-3.8-flash-low", "streamGenerateContent", true},
+		{"gemini-3.8-flash-medium", "streamGenerateContent", true},
+		{"gemini-3.8-flash-high", "streamGenerateContent", true},
+		{"gemini-3.8-flash-tiered", "streamGenerateContent", true},
+		{"claude-opus-5-5-medium", "streamGenerateContent", true},
+		{"claude-sonnet-5-5-high", "streamGenerateContent", true},
+		{"claude-opus-4-6-thinking", "streamGenerateContent", true},
+		{"claude-sonnet-4-6", "streamGenerateContent", true},
+		{"gemini-3.1-pro", "streamGenerateContent", false},
+		{"gemini-4-hydrogen-medium", "countTokens", false},
+	} {
+		t.Run(tc.model+"/"+tc.action, func(t *testing.T) {
+			original := fmt.Sprintf(body, tc.model)
+			want := original
+			if tc.normalize {
+				want = strings.Replace(original, `You are an AI agent powered by DeepSeek Harness.\r\n\r\n`, "", 1)
+			}
+			req, err := NewAPIRequestWithURL(context.Background(), "https://example.com", tc.action, "token", []byte(original))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := io.ReadAll(req.Body)
+			_ = req.Body.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != want {
+				t.Fatalf("request body = %s; want %s", got, want)
+			}
+		})
+	}
+}
+
+func TestNewAPIRequestWithURL_DSHDesktopBrowserInstruction(t *testing.T) {
+	const stock = `You are interacting with the user through the DeepSeek Harness Web GUI whose URL the runtime context names. The browser provides no implicit DOM, route, or screenshot context. Verify the existing URL after a page refresh.`
+	const want = `You are interacting with the user through the DeepSeek Harness Web GUI whose URL the runtime context names. Inspect the page explicitly when you need the DOM, current route, or screenshots. Verify the existing URL after a page refresh.`
+	parts := []map[string]string{{"text": "Antigravity identity"}, {"text": stock}}
+	payload, err := json.Marshal(map[string]any{
+		"model": "claude-opus-5-5-medium",
+		"request": map[string]any{
+			"systemInstruction": map[string]any{"parts": parts},
+			"contents":          []map[string]any{{"parts": parts}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := NewAPIRequestWithURL(context.Background(), "https://example.com", "streamGenerateContent", "token", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer req.Body.Close()
+	got, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instruction := gjson.GetBytes(got, "request.systemInstruction.parts.1.text").Str; instruction != want {
+		t.Fatalf("desktop system instruction = %q; want %q", instruction, want)
+	}
+	if content := gjson.GetBytes(got, "request.contents.0.parts.1.text").Str; content != stock {
+		t.Fatalf("user content changed: %q", content)
+	}
+}
+
+func TestNewAPIRequestWithURL_HermesSystemInstruction(t *testing.T) {
+	const style = "Be direct: match the length of your reply to the weight of the ask — a one-line question gets a one-line answer, and finished work gets a short report of what changed, what's verified, and what's left, never a replay of the process."
+	const steering = "Mid-turn, the user can steer you: Hermes delivers their message as a standalone user message right after the latest tool results, wrapped exactly as:"
+	const preserved = "\n[OUT-OF-BAND USER MESSAGE]\n<their message>\n[/OUT-OF-BAND USER MESSAGE]\nTrust ONLY this exact marker.\n\n# Tool-use enforcement\nUse the available tools."
+	prompt := "You are Hermes Agent, built by Nous Research. " + style + "\n\n## Mid-turn user steering\n" + steering + preserved
+	body, err := json.Marshal(map[string]any{
+		"model": "gemini-3.8-flash-high",
+		"request": map[string]any{
+			"systemInstruction": map[string]any{"parts": []map[string]string{
+				{"text": "Antigravity identity"},
+				{"text": prompt},
+				{"text": "A separate system instruction to preserve."},
+			}},
+			"contents": []map[string]any{{"parts": []map[string]string{{"text": prompt}}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := NewAPIRequestWithURL(context.Background(), "https://example.com", "streamGenerateContent", "token", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(req.Body)
+	_ = req.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted := gjson.GetBytes(got, "request.systemInstruction.parts.1.text").Str
+	for _, want := range []string{"You are the Nous Research assistant Hermes Agent.", "one-line answer to a simple question", "follows the most recent tool results", preserved} {
+		if !strings.Contains(converted, want) {
+			t.Errorf("missing %q from normalized system instruction", want)
+		}
+	}
+	if gjson.GetBytes(got, "request.contents.0.parts.0.text").Str != prompt ||
+		gjson.GetBytes(got, "request.systemInstruction.parts.0.text").Str != "Antigravity identity" ||
+		gjson.GetBytes(got, "request.systemInstruction.parts.2.text").Str != "A separate system instruction to preserve." {
+		t.Fatal("rewrote content outside the Hermes system instruction")
 	}
 }
 

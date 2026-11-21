@@ -395,6 +395,11 @@ func prepareOpenAIInputTokensCountRequest(
 	account *Account,
 	defaultMappedModel string,
 ) (*openAIInputTokensCountPrepared, error) {
+	compatBody, compatErr := normalizeGPT61MessagesReasoning(body, account, defaultMappedModel)
+	if compatErr != nil {
+		return nil, compatErr
+	}
+	body = compatBody
 	var anthropicReq apicompat.AnthropicRequest
 	if err := json.Unmarshal(body, &anthropicReq); err != nil {
 		return nil, fmt.Errorf("parse anthropic count_tokens request: %w", err)
@@ -406,6 +411,9 @@ func prepareOpenAIInputTokensCountRequest(
 	billingModel := resolveOpenAIForwardModel(account, normalizedModel, strings.TrimSpace(defaultMappedModel))
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 
+	// Validate and convert against the actual target model, just as Messages
+	// forwarding does. Counting emits only input-bearing fields below.
+	anthropicReq.Model = upstreamModel
 	responsesReq, err := apicompat.AnthropicToResponses(&anthropicReq)
 	if err != nil {
 		return nil, fmt.Errorf("convert anthropic request to responses: %w", err)

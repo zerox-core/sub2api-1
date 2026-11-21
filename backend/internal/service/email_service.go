@@ -28,7 +28,10 @@ var (
 	ErrInvalidVerifyCode     = infraerrors.BadRequest("INVALID_VERIFY_CODE", "invalid or expired verification code")
 	ErrVerifyCodeTooFrequent = infraerrors.TooManyRequests("VERIFY_CODE_TOO_FREQUENT", "please wait before requesting a new code")
 	ErrVerifyCodeMaxAttempts = infraerrors.TooManyRequests("VERIFY_CODE_MAX_ATTEMPTS", "too many failed attempts, please request a new code")
-
+	// ErrVerifyCodeDeliveryFailed reports that the code could not be handed to
+	// the mail server. The caller must surface this to the user instead of
+	// claiming the code was sent.
+	ErrVerifyCodeDeliveryFailed = infraerrors.ServiceUnavailable("VERIFY_CODE_DELIVERY_FAILED", "failed to send the verification code, please try again later")
 	// Password reset errors
 	ErrInvalidResetToken = infraerrors.BadRequest("INVALID_RESET_TOKEN", "invalid or expired password reset token")
 )
@@ -41,6 +44,13 @@ type EmailCache interface {
 	// IncrVerificationCodeAttempts atomically increments the attempt counter of an
 	// existing code and returns the new count. Returns an error if the code is missing.
 	IncrVerificationCodeAttempts(ctx context.Context, email string) (int, error)
+	// ReserveVerificationCodeCooldown atomically claims the per-email send slot.
+	// It returns true only for the caller that won the race, so concurrent send
+	// requests cannot each generate and mail out a different code.
+	ReserveVerificationCodeCooldown(ctx context.Context, email string, ttl time.Duration) (bool, error)
+	// ReleaseVerificationCodeCooldown drops the reservation when delivery failed,
+	// so a transport error does not lock the user out for the whole cooldown.
+	ReleaseVerificationCodeCooldown(ctx context.Context, email string) error
 
 	// Notify email verification code methods
 	GetNotifyVerifyCode(ctx context.Context, email string) (*VerificationCodeData, error)
@@ -143,6 +153,9 @@ func emailRecipientName(email string) string {
 
 // GetSMTPConfig 从数据库获取SMTP配置
 func (s *EmailService) GetSMTPConfig(ctx context.Context) (*SMTPConfig, error) {
+	if s == nil || s.settingRepo == nil {
+		return nil, ErrEmailNotConfigured
+	}
 	keys := []string{
 		SettingKeySMTPHost,
 		SettingKeySMTPPort,
@@ -324,23 +337,33 @@ func (s *EmailService) GenerateVerifyCode() (string, error) {
 	return string(code), nil
 }
 
-// SendVerifyCode 发送验证码邮件
+// SendVerifyCode 发送验证码邮件（同步：占位 + 存码 + 投递一次完成）
 func (s *EmailService) SendVerifyCode(ctx context.Context, email, siteName string, locale ...string) error {
-	// 检查是否在冷却期内
-	existing, err := s.cache.GetVerificationCode(ctx, email)
-	if err == nil && existing != nil {
-		if time.Since(existing.CreatedAt) < verifyCodeCooldown {
-			return ErrVerifyCodeTooFrequent
-		}
+	code, err := s.prepareVerifyCode(ctx, email)
+	if err != nil {
+		return err
+	}
+	return s.DeliverVerifyCode(ctx, email, siteName, firstEmailLocale(locale), code)
+}
+
+// prepareVerifyCode 原子抢占冷却槽位并生成、落库验证码，返回待投递的验证码。
+// 先读冷却再写的写法会让并发请求同时通过检查，各自生成不同验证码并各自发信，
+// 最终用户收到的码与缓存里的码不一致，必然验证失败。
+func (s *EmailService) prepareVerifyCode(ctx context.Context, email string) (string, error) {
+	reserved, err := s.cache.ReserveVerificationCodeCooldown(ctx, email, verifyCodeCooldown)
+	if err != nil {
+		return "", fmt.Errorf("reserve verify code cooldown: %w", err)
+	}
+	if !reserved {
+		return "", ErrVerifyCodeTooFrequent
 	}
 
-	// 生成验证码
 	code, err := s.GenerateVerifyCode()
 	if err != nil {
-		return fmt.Errorf("generate code: %w", err)
+		s.releaseCooldown(ctx, email)
+		return "", fmt.Errorf("generate code: %w", err)
 	}
 
-	// 保存验证码到 Redis
 	data := &VerificationCodeData{
 		Code:      code,
 		Attempts:  0,
@@ -348,13 +371,53 @@ func (s *EmailService) SendVerifyCode(ctx context.Context, email, siteName strin
 		ExpiresAt: time.Now().Add(verifyCodeTTL),
 	}
 	if err := s.cache.SetVerificationCode(ctx, email, data, verifyCodeTTL); err != nil {
-		return fmt.Errorf("save verify code: %w", err)
+		s.releaseCooldown(ctx, email)
+		return "", fmt.Errorf("save verify code: %w", err)
+	}
+	return code, nil
+}
+
+// DeliverVerifyCode 投递已落库的验证码邮件；失败时释放冷却槽位，
+// 避免一次投递故障把用户锁在冷却期内拿不到新码。
+// 传入空 code 时按缓存中的当前验证码投递（供旧调用方兼容）。
+func (s *EmailService) DeliverVerifyCode(ctx context.Context, email, siteName, locale string, code ...string) error {
+	verifyCode := ""
+	if len(code) > 0 {
+		verifyCode = code[0]
+	}
+	if strings.TrimSpace(verifyCode) == "" {
+		stored, err := s.cache.GetVerificationCode(ctx, email)
+		if err != nil || stored == nil {
+			return ErrInvalidVerifyCode
+		}
+		verifyCode = stored.Code
 	}
 
+	if err := s.deliverVerifyCode(ctx, email, siteName, locale, verifyCode); err != nil {
+		// Release the cooldown so the user can retry immediately, and drop the
+		// stored code: keeping it would leave a code in place that no mailbox
+		// ever received, which is exactly how a "valid" code turns out invalid.
+		s.releaseCooldown(ctx, email)
+		if delErr := s.cache.DeleteVerificationCode(ctx, email); delErr != nil {
+			slog.Error("failed to delete undelivered verify code", "error", delErr)
+		}
+		slog.Error("verify code delivery failed", "recipient_hash", notificationEmailHash(email), "error", err.Error())
+		return ErrVerifyCodeDeliveryFailed
+	}
+	return nil
+}
+
+func (s *EmailService) releaseCooldown(ctx context.Context, email string) {
+	if err := s.cache.ReleaseVerificationCodeCooldown(ctx, email); err != nil {
+		slog.Error("failed to release verify code cooldown", "error", err)
+	}
+}
+
+func (s *EmailService) deliverVerifyCode(ctx context.Context, email, siteName, locale, code string) error {
 	if s.notificationEmailService != nil {
 		err := s.notificationEmailService.Send(ctx, NotificationEmailSendInput{
 			Event:          NotificationEmailEventAuthVerifyCode,
-			Locale:         firstEmailLocale(locale),
+			Locale:         locale,
 			RecipientEmail: email,
 			RecipientName:  emailRecipientName(email),
 			Variables: map[string]string{
@@ -371,15 +434,11 @@ func (s *EmailService) SendVerifyCode(ctx context.Context, email, siteName strin
 		slog.Warn("failed to send templated verification email, falling back to legacy template", "recipient_hash", notificationEmailHash(email), "error", err)
 	}
 
-	// 构建邮件内容
 	subject := fmt.Sprintf("[%s] Email Verification Code", siteName)
 	body := s.buildVerifyCodeEmailBody(code, siteName)
-
-	// 发送邮件
 	if err := s.SendEmail(ctx, email, subject, body); err != nil {
 		return fmt.Errorf("send email: %w", err)
 	}
-
 	return nil
 }
 

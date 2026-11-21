@@ -828,3 +828,11 @@ func (s *userHandlerEmailCacheStub) IncrNotifyVerifyCodeAttempts(context.Context
 func (s *userHandlerEmailCacheStub) ConsumePasswordResetToken(context.Context, string, string) (bool, error) {
 	return false, nil
 }
+
+func (s *userHandlerEmailCacheStub) ReserveVerificationCodeCooldown(context.Context, string, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (s *userHandlerEmailCacheStub) ReleaseVerificationCodeCooldown(context.Context, string) error {
+	return nil
+}

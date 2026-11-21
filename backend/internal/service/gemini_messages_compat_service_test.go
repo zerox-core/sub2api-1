@@ -199,7 +199,7 @@ func TestGeminiForwardAsChatCompletions_FunctionNamedWebSearchStaysClientSide(t 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	body := []byte(`{
-		"model":"gemini-3.6-flash-high",
+		"model":"gemini-3.8-flash-high",
 		"messages":[{"role":"user","content":"search and read"}],
 		"tools":[
 			{"type":"function","function":{"name":"web_search","description":"Search through the Hermes client","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}},

@@ -3610,3 +3610,11 @@ func (s *oauthPendingFlowEmailCacheStub) IncrNotifyVerifyCodeAttempts(context.Co
 func (s *oauthPendingFlowEmailCacheStub) ConsumePasswordResetToken(context.Context, string, string) (bool, error) {
 	return false, nil
 }
+
+func (s *oauthPendingFlowEmailCacheStub) ReserveVerificationCodeCooldown(context.Context, string, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (s *oauthPendingFlowEmailCacheStub) ReleaseVerificationCodeCooldown(context.Context, string) error {
+	return nil
+}
