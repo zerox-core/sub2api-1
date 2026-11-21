@@ -661,7 +661,10 @@ func configuredCodexGPTReasoningLevels(modelID string) []configuredCodexReasonin
 			Description: "Maximum reasoning depth for complex tasks",
 		})
 	}
-	if isOpenAIGPT6AstraModel(modelID) || openai.IsGPT61ModelSpelling(modelID) || normalized == "gpt-5.6-sol" || normalized == "gpt-5.6-terra" {
+	// ultra 只有 Terra 与 Astra 这一支真正开放。上游对 gpt-6.2-sol 请求 ultra 会返回
+	// 400 "Invalid value: 'ultra'. Supported values are: none/minimal/low/medium/high/
+	// xhigh/max"，因此不能把 Sol 也当作支持 ultra，否则裁剪逻辑放行、上游仍然报错。
+	if isOpenAIGPT6AstraModel(modelID) || normalized == "gpt-5.6-terra" || openai.IsGPT61TerraModelSpelling(modelID) {
 		levels = append(levels, configuredCodexReasoningLevel{
 			Effort:      "ultra",
 			Description: "Maximum reasoning with automatic task delegation",

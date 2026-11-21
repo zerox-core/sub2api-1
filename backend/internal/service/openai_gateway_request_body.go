@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"net/http"
 	"strings"
@@ -60,6 +61,150 @@ func buildOpenAIResponsesURLForPlatform(platform string, base string) string {
 		return buildOpenAIEndpointURL(base, profile.ResponsesPath)
 	}
 	return buildOpenAIResponsesURL(base)
+}
+
+// upstreamModelHintFromBody 从请求体取模型名，作为档位裁剪的判定依据。
+// 账号映射尚未解析时也能用，覆盖 Forward 入口处的早期裁剪。
+func upstreamModelHintFromBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	if m := strings.TrimSpace(gjson.GetBytes(body, "model").String()); m != "" {
+		return m
+	}
+	return ""
+}
+
+// clampOpenAIReasoningEffortBodyForModel 在字节层面把不支持的思考档位改写成就近档位。
+// 与 clampReasoningEffortInBody（map 版）等价，供 Forward 入口这种还没有解码的
+// 场景使用。返回改写后的 body 与是否发生改写。
+func clampOpenAIReasoningEffortBodyForModel(body []byte, account *Account, model string) ([]byte, bool) {
+	model = strings.TrimSpace(model)
+	if len(body) == 0 || model == "" {
+		return body, false
+	}
+	// 透传账号由上游自行判定，不改写。
+	if account != nil && account.IsOpenAIPassthroughEnabled() {
+		return body, false
+	}
+	out := body
+	changed := false
+	for _, path := range []string{"reasoning.effort", "reasoning_effort"} {
+		raw := strings.TrimSpace(gjson.GetBytes(out, path).String())
+		if raw == "" {
+			continue
+		}
+		adjusted, didChange := normalizeOpenAIResponsesReasoningEffortForModel(model, raw)
+		if !didChange {
+			continue
+		}
+		next, err := sjson.SetBytes(out, path, adjusted)
+		if err != nil {
+			continue
+		}
+		out = next
+		changed = true
+		log.Printf("[OpenAI] Clamped %s at entry for model %s: %s -> %s", path, model, raw, adjusted)
+	}
+	return out, changed
+}
+
+// normalizeOpenAIResponsesReasoningEffortForModel 把客户端请求的思考挡位钳制到
+// 目标模型实际支持的档位集合内，避免上游以 400 拒绝未知挡位。
+//
+// 背景：DSH / Codex 之类的客户端会把模型目录里声明过的所有档位都放进选择器，
+// 但同一档位在不同模型上并不都成立（例如 xhigh 只在新模型上有，ultra 只有少数
+// 模型有）。用户选了某个挡位、请求落到一个不支持它的模型上，上游就回 400
+// "invalid reasoning effort"。这里按「就近降级」处理：挑一个不大于请求档位的
+// 最近档位，全都比请求大时取最小的，从而保持用户"要更强推理"的意图而不报错。
+//
+// 返回 (新挡位, 是否需要改写)。没有改动时返回原值与 false。
+func normalizeOpenAIResponsesReasoningEffortForModel(model string, effort string) (string, bool) {
+	requested := NormalizeMaxReasoningEffort(effort)
+	if requested == "" {
+		// ultra 不在 NormalizeMaxReasoningEffort 的已知档位里（那个函数服务于"上限"
+		// 策略，只认到 max）。这里单独兜住，否则请求 ultra 会被当作"未知档位"直接
+		// 放行，上游随即 400。
+		switch strings.ToLower(strings.TrimSpace(effort)) {
+		case "ultra":
+			requested = "ultra"
+		default:
+			return effort, false
+		}
+	}
+	supported := supportedReasoningEffortsForModel(model)
+	if len(supported) == 0 {
+		return effort, false
+	}
+	for _, level := range supported {
+		if level == requested {
+			return effort, false
+		}
+	}
+	// 档位强度序（由弱到强），用于就近匹配。
+	order := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+	rank := func(level string) int {
+		for i, l := range order {
+			if l == level {
+				return i
+			}
+		}
+		return -1
+	}
+	requestedRank := rank(requested)
+	if requestedRank < 0 {
+		return effort, false
+	}
+	// 优先挑不大于请求的最近档位；没有则挑最小的可用档位。
+	best := ""
+	bestRank := -1
+	for _, level := range supported {
+		r := rank(level)
+		if r < 0 || r > requestedRank {
+			continue
+		}
+		if r > bestRank {
+			best, bestRank = level, r
+		}
+	}
+	if best == "" {
+		minRank := -1
+		for _, level := range supported {
+			r := rank(level)
+			if r < 0 {
+				continue
+			}
+			if minRank < 0 || r < minRank {
+				best, minRank = level, r
+			}
+		}
+	}
+	if best == "" || best == requested {
+		return effort, false
+	}
+	return best, true
+}
+
+// supportedReasoningEffortsForModel 返回模型实际接受的思考挡位（用于请求前的档位裁剪）。
+//
+// 不能复用 configuredCodexGPTReasoningLevels：那个函数服务于「模型目录展示」，按命名
+// 规则推断，会把 gpt-6.2-sol 错判为支持 ultra，也会因为 isOpenAIGPT6Model 只认
+// "gpt-6-sol" 而不认 "gpt-6.2-sol"，把 max 误判为不支持。这里按上游 400 报错里给出的
+// 权威集合来定，宁可少放行也不要放行后报错。
+//
+// 实测依据（Plus/ChatGPT 后端返回的 400 原文）：
+//   - gpt-6.2-sol: none, minimal, low, medium, high, xhigh, max（没有 ultra）
+//   - gpt-6.2-astra / gpt-6.1-terra / gpt-5.6-terra: 额外支持 ultra
+func supportedReasoningEffortsForModel(model string) []string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" || !strings.HasPrefix(m, "gpt-") {
+		return nil
+	}
+	levels := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+	// 实测（Plus/ChatGPT 后端）：gpt-6.2-astra 的 400 原文也只列到 max，
+	// 与 sol 相同，并不支持 ultra。因此这里不再按模型名放行 ultra——上游没有
+	// 任何一条已验证支持它，放行只会换来 400。将来若确实有模型开放，再按实测补。
+	return levels
 }
 
 func shouldPreserveOpenAIResponsesNoneReasoningEffort(account *Account) bool {

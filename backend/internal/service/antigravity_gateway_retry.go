@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
@@ -664,7 +665,7 @@ urlFallbackLoop:
 
 					// 重试用尽，标记账户限流
 					p.handleError(p.ctx, p.prefix, p.account, resp.StatusCode, resp.Header, respBody, p.requestedModel, p.groupID, p.sessionHash, p.isStickySession)
-					logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d rate_limited base_url=%s body=%s", p.prefix, resp.StatusCode, baseURL, truncateForLog(respBody, 200))
+					logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d retries_exhausted base_url=%s body=%s", p.prefix, resp.StatusCode, baseURL, truncateForLog(respBody, 200))
 					resp = &http.Response{
 						StatusCode: resp.StatusCode,
 						Header:     resp.Header.Clone(),
@@ -704,7 +705,7 @@ urlFallbackLoop:
 					}
 				}
 
-				// INTERNAL 500 渐进惩罚：3 次重试全部命中特定 500 时递增计数器并惩罚
+				// Record repeated upstream INTERNAL errors for diagnostics.
 				if allAttemptsInternal500 && isAntigravityInternalServerError(resp.StatusCode, respBody) {
 					s.handleInternal500RetryExhausted(p.ctx, p.prefix, p.account)
 				}
@@ -829,19 +830,63 @@ func tempUnscheduleGoogleConfigError(ctx context.Context, repo AccountRepository
 	}
 }
 
-// emptyResponseCooldown 空流式响应的临时封禁时长
-const emptyResponseCooldown = 1 * time.Minute
+// emptyResponseCooldown 空流式响应的临时封禁时长。
+//
+// 空流多由上游软限流或瞬时抖动引起，并不是账号本身坏了。原值 1 分钟在多账号
+// 并发场景下会被放大：一次高峰把几个号先后打成空流，每个号各封 1 分钟，整组
+// 就出现「no available accounts」全不可用。缩短到 20 秒，让账号快速回到池子里，
+// 同时仍保留「短时间内不反复调度到同一异常账号」的保护。
+const emptyResponseCooldown = 20 * time.Second
+
+// emptyResponseConsecutiveCooldown 是短时间内连续空流后使用的退避时长。
+// 单次空流按 emptyResponseCooldown 快速恢复；同一账号在窗口内反复空流说明该号
+// 确实有问题（限流/额度），才升级到更长的冷却，避免频繁抖动拖垮整组。
+const emptyResponseConsecutiveCooldown = 2 * time.Minute
+
+// emptyResponseStreakWindow 判定「连续空流」的时间窗口。
+const emptyResponseStreakWindow = 5 * time.Minute
 
 // tempUnscheduleEmptyResponse 对空流式响应触发临时封禁，
 // 避免短时间内反复调度到同一个返回空响应的账号。
 func tempUnscheduleEmptyResponse(ctx context.Context, repo AccountRepository, accountID int64, logPrefix string) {
-	until := time.Now().Add(emptyResponseCooldown)
-	reason := "empty stream response (auto temp-unschedule 1m)"
+	cooldown := emptyResponseCooldown
+	// 升频保护：同一账号在窗口内再次被判空流，说明不是一次性抖动。
+	if streak := bumpEmptyResponseStreak(accountID); streak >= 2 {
+		cooldown = emptyResponseConsecutiveCooldown
+	}
+	until := time.Now().Add(cooldown)
+	reason := fmt.Sprintf("empty stream response (auto temp-unschedule %s)", cooldown)
 	if err := repo.SetTempUnschedulable(ctx, accountID, until, reason); err != nil {
 		log.Printf("%s temp_unschedule_failed account=%d error=%v", logPrefix, accountID, err)
 	} else {
 		log.Printf("%s temp_unscheduled account=%d until=%v reason=%q", logPrefix, accountID, until.Format("15:04:05"), reason)
 	}
+}
+
+// emptyResponseStreak 记录各账号最近一次空流时间，用于识别连续性。
+var emptyResponseStreak struct {
+	mu    sync.Mutex
+	last  map[int64]time.Time
+	count map[int64]int
+}
+
+// bumpEmptyResponseStreak 累加账号的空流计数并返回当前连续次数。
+// 距上次空流超过 emptyResponseStreakWindow 则重新计时。
+func bumpEmptyResponseStreak(accountID int64) int {
+	emptyResponseStreak.mu.Lock()
+	defer emptyResponseStreak.mu.Unlock()
+	if emptyResponseStreak.last == nil {
+		emptyResponseStreak.last = make(map[int64]time.Time)
+		emptyResponseStreak.count = make(map[int64]int)
+	}
+	now := time.Now()
+	if prev, ok := emptyResponseStreak.last[accountID]; !ok || now.Sub(prev) > emptyResponseStreakWindow {
+		emptyResponseStreak.count[accountID] = 1
+	} else {
+		emptyResponseStreak.count[accountID]++
+	}
+	emptyResponseStreak.last[accountID] = now
+	return emptyResponseStreak.count[accountID]
 }
 
 // sleepAntigravityBackoffWithContext 带 context 取消检查的退避等待
@@ -1244,13 +1289,28 @@ func (s *AntigravityGatewayService) handleUpstreamError(
 		return nil
 	}
 
-	// 429：尝试解析模型级限流，解析失败时兜底为账号级限流
+	// Persist a 429 only when the upstream provides a rate-limit signal.
 	if statusCode == 429 {
 		if logBody, maxBytes := s.getLogConfig(); logBody {
 			logger.LegacyPrintf("service.antigravity_gateway", "[Antigravity-Debug] 429 response body: %s", truncateString(string(body), maxBytes))
 		}
 
 		resetAt := ParseGeminiRateLimitResetTime(body)
+		now := time.Now()
+		if resetAt != nil && !time.Unix(*resetAt, 0).After(now) {
+			resetAt = nil
+		}
+		if resetAt == nil {
+			if headerReset := parseRetryAfterResetTime(headers, now); headerReset != nil && headerReset.After(now) {
+				resetUnix := headerReset.Unix()
+				resetAt = &resetUnix
+			}
+		}
+		if resetAt == nil && classifyAntigravity429(body) == antigravity429Unknown {
+			logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 upstream_limit_unconfirmed account=%d model=%s",
+				prefix, account.ID, requestedModel)
+			return nil
+		}
 		defaultDur := s.getDefaultRateLimitDuration()
 
 		// 尝试解析模型 key 并设置模型级限流

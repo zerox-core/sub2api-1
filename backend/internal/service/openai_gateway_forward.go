@@ -29,6 +29,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, filterErr
 	}
 	body = filteredBody
+	// 思考挡位裁剪必须放在最前面：后面按 passthrough / codex transform / 原生
+	// ChatCompletions 分流，任何一条分支都可能把不支持的档位原样送到上游，
+	// 上游对 gpt-6.2-sol 的 ultra 会直接 400 "Invalid value: 'ultra'"。
+	// 这里统一在入口处归一化，避免每条分支各改一遍。
+	if clampedBody, didClamp := clampOpenAIReasoningEffortBodyForModel(body, account, upstreamModelHintFromBody(body)); didClamp {
+		body = clampedBody
+	}
 	clearGrokResponsesClientToolMapping(c)
 	clearOpenAIResponsesClientToolMapping(c)
 	clearOpenAIResponsesNamespaceNames(c)
@@ -400,6 +407,21 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String()) == "minimal" {
 		markPatchSet("reasoning.effort", "none")
 		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Normalized reasoning.effort: minimal -> none (account: %s)", account.Name)
+	}
+	// 思考挡位裁剪：客户端（DSH / Codex）会把目录里所有档位都放进选择器，但落到
+	// 具体模型上未必都支持。把不支持的挡位就近降级，避免上游 400 invalid reasoning effort。
+	// 注意 Codex 客户端还会用 reasoning_effort 这个平铺字段，两个都要处理。
+	for _, effortPath := range []string{"reasoning.effort", "reasoning_effort"} {
+		requested := strings.TrimSpace(gjson.GetBytes(body, effortPath).String())
+		if requested == "" {
+			continue
+		}
+		if adjusted, changed := normalizeOpenAIResponsesReasoningEffortForModel(upstreamModel, requested); changed {
+			markPatchSet(effortPath, adjusted)
+			logger.LegacyPrintf("service.openai_gateway",
+				"[OpenAI] Clamped %s for model %s: %s -> %s (account: %s)",
+				effortPath, upstreamModel, requested, adjusted, account.Name)
+		}
 	}
 	if strings.TrimSpace(gjson.GetBytes(body, "text.format.type").String()) == "json_schema" ||
 		strings.TrimSpace(gjson.GetBytes(body, "response_format.type").String()) == "json_schema" {

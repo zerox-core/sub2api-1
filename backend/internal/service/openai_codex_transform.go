@@ -176,6 +176,38 @@ func applyCodexOAuthTransform(reqBody map[string]any, isCodexCLI bool, isCompact
 	})
 }
 
+// clampReasoningEffortInBody 就地把请求体里不支持的思考档位降级到该模型支持的最近档位。
+//
+// 同时处理两种客户端写法：
+//   - Responses 风格：{"reasoning": {"effort": "ultra"}}
+//   - Codex/兼容风格：{"reasoning_effort": "ultra"}
+//
+// 返回 true 表示发生了改写。
+func clampReasoningEffortInBody(reqBody map[string]any, model string) bool {
+	if reqBody == nil || strings.TrimSpace(model) == "" {
+		return false
+	}
+	changed := false
+
+	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
+		if raw, ok := reasoning["effort"].(string); ok {
+			if adjusted, didChange := normalizeOpenAIResponsesReasoningEffortForModel(model, raw); didChange {
+				reasoning["effort"] = adjusted
+				changed = true
+			}
+		}
+	}
+
+	if raw, ok := reqBody["reasoning_effort"].(string); ok {
+		if adjusted, didChange := normalizeOpenAIResponsesReasoningEffortForModel(model, raw); didChange {
+			reqBody["reasoning_effort"] = adjusted
+			changed = true
+		}
+	}
+
+	return changed
+}
+
 func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuthTransformOptions) codexTransformResult {
 	result := codexTransformResult{}
 	if normalizeOpenAIOAuthResponsesCompatibilityFields(reqBody) {
@@ -195,6 +227,13 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 			result.Modified = true
 		}
 		result.NormalizedModel = normalizedModel
+	}
+
+	// 思考挡位裁剪：把模型不支持的档位就近降级。
+	// 上游对 gpt-6.2-sol 请求 ultra 会返回 400 "Invalid value: 'ultra'"，因此必须在
+	// 请求体进入转发前归一化，否则客户端选到目录里声明但该模型未开放的档位就报错。
+	if clampReasoningEffortInBody(reqBody, normalizedModel) {
+		result.Modified = true
 	}
 
 	if opts.IsCompact {
