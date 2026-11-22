@@ -404,7 +404,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Upstream model resolved: %s -> %s (account: %s, type: %s, isCodexCLI: %v)", billingModel, upstreamModel, account.Name, account.Type, isCodexCLI)
 		}
 	}
-	if strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String()) == "minimal" {
+	// minimal -> none 是老一代 GPT 的兼容处理（它们用 none 表示"不思考"）。
+	// GPT-6.2/6.1 这一代不支持 none，改写成 none 反而会触发
+	// "Unsupported value: 'none' is not supported with the 'gpt-6.2-sol' model"。
+	// 因此仅在该模型确实接受 none 时才做这个转换，否则交给下面的档位裁剪处理。
+	if strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String()) == "minimal" &&
+		modelAcceptsReasoningEffort(upstreamModel, "none") {
 		markPatchSet("reasoning.effort", "none")
 		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Normalized reasoning.effort: minimal -> none (account: %s)", account.Name)
 	}

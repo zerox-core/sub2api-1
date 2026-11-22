@@ -96,6 +96,17 @@ func clampOpenAIReasoningEffortBodyForModel(body []byte, account *Account, model
 		}
 		adjusted, didChange := normalizeOpenAIResponsesReasoningEffortForModel(model, raw)
 		if !didChange {
+			// "default" 表示"用模型默认档位"，不是合法枚举值，上游会 400
+			// "Invalid value: 'default'"。正确做法是删掉该字段，让上游自己取默认，
+			// 而不是把它映射成某个具体档位（那会改变用户语义）。
+			if strings.EqualFold(raw, "default") {
+				next, err := sjson.DeleteBytes(out, path)
+				if err == nil {
+					out = next
+					changed = true
+					log.Printf("[OpenAI] Dropped %s=default at entry for model %s", path, model)
+				}
+			}
 			continue
 		}
 		next, err := sjson.SetBytes(out, path, adjusted)
@@ -122,12 +133,16 @@ func clampOpenAIReasoningEffortBodyForModel(body []byte, account *Account, model
 func normalizeOpenAIResponsesReasoningEffortForModel(model string, effort string) (string, bool) {
 	requested := NormalizeMaxReasoningEffort(effort)
 	if requested == "" {
-		// ultra 不在 NormalizeMaxReasoningEffort 的已知档位里（那个函数服务于"上限"
-		// 策略，只认到 max）。这里单独兜住，否则请求 ultra 会被当作"未知档位"直接
-		// 放行，上游随即 400。
+		// NormalizeMaxReasoningEffort 只认 minimal..max，以下两个值要单独兜住：
+		//   - ultra：比 max 更高，目录里有但部分模型未开放
+		//   - none：表示"不思考"，GPT-6.2/6.1 这一代明确不支持（上游 400 原文：
+		//     "Unsupported value: 'none' is not supported with the 'gpt-6.2-sol' model"）
+		// 不兜住的话它们会被当作"未知档位"直接放行，上游随即 400。
 		switch strings.ToLower(strings.TrimSpace(effort)) {
 		case "ultra":
 			requested = "ultra"
+		case "none":
+			requested = "none"
 		default:
 			return effort, false
 		}
@@ -185,26 +200,44 @@ func normalizeOpenAIResponsesReasoningEffortForModel(model string, effort string
 	return best, true
 }
 
+// modelAcceptsReasoningEffort 报告模型是否接受指定档位。
+// 无法判定（非 GPT 命名）时返回 false，调用方据此保留原有兼容行为。
+func modelAcceptsReasoningEffort(model, effort string) bool {
+	supported := supportedReasoningEffortsForModel(model)
+	if len(supported) == 0 {
+		return false
+	}
+	target := NormalizeMaxReasoningEffort(effort)
+	if target == "" {
+		target = strings.ToLower(strings.TrimSpace(effort))
+	}
+	for _, level := range supported {
+		if level == target {
+			return true
+		}
+	}
+	return false
+}
+
 // supportedReasoningEffortsForModel 返回模型实际接受的思考挡位（用于请求前的档位裁剪）。
 //
 // 不能复用 configuredCodexGPTReasoningLevels：那个函数服务于「模型目录展示」，按命名
 // 规则推断，会把 gpt-6.2-sol 错判为支持 ultra，也会因为 isOpenAIGPT6Model 只认
-// "gpt-6-sol" 而不认 "gpt-6.2-sol"，把 max 误判为不支持。这里按上游 400 报错里给出的
-// 权威集合来定，宁可少放行也不要放行后报错。
+// "gpt-6-sol" 而不认 "gpt-6.2-sol"，把 max 误判为不支持。
 //
-// 实测依据（Plus/ChatGPT 后端返回的 400 原文）：
-//   - gpt-6.2-sol: none, minimal, low, medium, high, xhigh, max（没有 ultra）
-//   - gpt-6.2-astra / gpt-6.1-terra / gpt-5.6-terra: 额外支持 ultra
+// 这里以上游 400 报错的原文为准。注意两种 400 的 Supported values 并不相同：
+//   - 未知挡位（如 ultra）报的是通用枚举：none/minimal/low/.../max，**不代表该模型真支持**
+//   - 已知但不适用于该模型的挡位（如 none）报的是该模型的真实集合：
+//     gpt-6.2-sol 只支持 low/medium/high/xhigh/max，没有 none 与 minimal
+//
+// 所以判定必须用后者的口径，否则 none/minimal 会被误放行，继续 400。
 func supportedReasoningEffortsForModel(model string) []string {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" || !strings.HasPrefix(m, "gpt-") {
 		return nil
 	}
-	levels := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
-	// 实测（Plus/ChatGPT 后端）：gpt-6.2-astra 的 400 原文也只列到 max，
-	// 与 sol 相同，并不支持 ultra。因此这里不再按模型名放行 ultra——上游没有
-	// 任何一条已验证支持它，放行只会换来 400。将来若确实有模型开放，再按实测补。
-	return levels
+	// GPT-6.2 / 6.1 这一代：不支持 none 与 minimal，也没有 ultra。
+	return []string{"low", "medium", "high", "xhigh", "max"}
 }
 
 func shouldPreserveOpenAIResponsesNoneReasoningEffort(account *Account) bool {
